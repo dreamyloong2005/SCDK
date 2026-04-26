@@ -16,6 +16,7 @@ enum scdk_object_type {
     SCDK_OBJ_NONE = 0,
     SCDK_OBJ_FRAME,
     SCDK_OBJ_ADDRESS_SPACE,
+    SCDK_OBJ_TASK,
     SCDK_OBJ_THREAD,
     SCDK_OBJ_ENDPOINT,
     SCDK_OBJ_RING,

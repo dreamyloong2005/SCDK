@@ -16,9 +16,13 @@ It explores a hybrid design:
 SCDK is not a UNIX clone. POSIX compatibility may be added later as a
 user-space compatibility layer, but it is not the native kernel API.
 
+## Version
+
+Current version: `0.1.0-alpha.2`
+
 ## Current Milestone
 
-This tree currently implements Milestone 0 through Milestone 7:
+This tree currently implements Milestone 0 through Milestone 10:
 
 - Limine bootable ISO
 - higher-half x86_64 freestanding kernel ELF
@@ -44,9 +48,19 @@ This tree currently implements Milestone 0 through Milestone 7:
 - boot-time grant read/write-permission self-tests
 - console service as the first SCDK service
 - normal post-console logs routed through endpoint/message dispatch
+- Limine memory map based PMM
+- static physical 4 KiB page stack
+- boot-time page alloc/free and reserved-overlap self-tests
+- current CR3 page-table inspection
+- bootstrap x86_64 VMM map/unmap helpers
+- boot-time mapped-page read/write self-test
+- page fault logging placeholder
+- task object skeleton
+- thread object skeleton
+- current task/thread scheduler placeholder
+- cooperative yield stub self-test
 
-PMM, VMM, scheduler, filesystem, and user-space support are intentionally not
-implemented yet.
+Filesystem and user-space support are intentionally not implemented yet.
 
 ## Build
 
@@ -86,7 +100,10 @@ Expected serial output includes:
 [boot] console service initialized
 [boot] ring core initialized
 [boot] grant core initialized
-[boot] milestone 7 complete
+[boot] pmm initialized
+[boot] vmm initialized
+[boot] scheduler initialized
+[boot] milestone 10 complete
 ```
 
 ## VMware

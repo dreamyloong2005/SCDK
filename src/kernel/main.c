@@ -10,15 +10,19 @@
 #include <scdk/grant.h>
 #include <scdk/log.h>
 #include <scdk/message.h>
+#include <scdk/mm.h>
 #include <scdk/object.h>
 #include <scdk/panic.h>
 #include <scdk/ring.h>
+#include <scdk/scheduler.h>
 #include <scdk/serial.h>
 #include <scdk/service.h>
 
 #ifndef SCDK_VERSION
 #define SCDK_VERSION "0.0.0-unknown"
 #endif
+
+#define SCDK_VMM_SELFTEST_VIRT 0xffffffffc0000000ull
 
 __attribute__((used, section(".limine_requests_start")))
 static volatile uint64_t limine_requests_start_marker[4] = LIMINE_REQUESTS_START_MARKER;
@@ -359,6 +363,217 @@ static void run_grant_selftest(void) {
     scdk_log_write("boot", "grant core initialized");
 }
 
+static void run_pmm_selftest(void) {
+    struct limine_memmap_response *memmap = memmap_request.response;
+    struct scdk_pmm_stats before;
+    struct scdk_pmm_stats after_alloc;
+    struct scdk_pmm_stats after_free;
+    uint64_t pages[3];
+    scdk_status_t status;
+
+    scdk_log_write("test", "pmm self-test start");
+
+    status = scdk_pmm_init(memmap);
+    require_status("pmm init", status, SCDK_OK);
+
+    scdk_pmm_get_stats(&before);
+    if (before.managed_pages == 0u ||
+        before.free_pages == 0u ||
+        before.usable_regions == 0u ||
+        before.reserved_regions == 0u) {
+        scdk_panic("pmm stats missing expected memory map data");
+    }
+    scdk_log_write("test", "pmm stats pass");
+
+    for (uint32_t i = 0; i < 3u; i++) {
+        status = scdk_page_alloc(&pages[i]);
+        if (status != SCDK_OK) {
+            scdk_panic("pmm alloc %u failed: %lld", i, (long long)status);
+        }
+
+        if ((pages[i] & (SCDK_PAGE_SIZE - 1u)) != 0u ||
+            !scdk_pmm_is_usable_page(pages[i]) ||
+            scdk_pmm_is_reserved_page(pages[i])) {
+            scdk_panic("pmm allocated invalid page 0x%llx",
+                       (unsigned long long)pages[i]);
+        }
+
+        for (uint32_t j = 0; j < i; j++) {
+            if (pages[j] == pages[i]) {
+                scdk_panic("pmm allocated duplicate page 0x%llx",
+                           (unsigned long long)pages[i]);
+            }
+        }
+    }
+    scdk_log_write("test", "pmm allocated 4 KiB pages pass");
+
+    scdk_pmm_get_stats(&after_alloc);
+    if (after_alloc.free_pages + 3u != before.free_pages ||
+        after_alloc.allocated_pages != before.allocated_pages + 3u) {
+        scdk_panic("pmm allocation counters mismatch");
+    }
+    scdk_log_write("test", "pmm allocation counters pass");
+
+    for (uint32_t i = 0; i < 3u; i++) {
+        status = scdk_page_free(pages[i]);
+        if (status != SCDK_OK) {
+            scdk_panic("pmm free %u failed: %lld", i, (long long)status);
+        }
+    }
+
+    scdk_pmm_get_stats(&after_free);
+    if (after_free.free_pages != before.free_pages ||
+        after_free.allocated_pages != before.allocated_pages) {
+        scdk_panic("pmm free counters mismatch");
+    }
+    scdk_log_write("test", "pmm freed 4 KiB pages pass");
+
+    status = scdk_page_free(pages[0]);
+    require_status("pmm double-free rejected", status, SCDK_ERR_BUSY);
+
+    scdk_log_write("boot", "pmm initialized");
+}
+
+static void run_vmm_selftest(void) {
+    uint64_t hhdm_offset;
+    uint64_t cr3_phys = 0;
+    uint64_t data_phys = 0;
+    uint64_t translated = 0;
+    uint64_t flags = 0;
+    volatile uint64_t *mapped;
+    volatile uint64_t *hhdm_view;
+    scdk_status_t status;
+
+    scdk_log_write("test", "vmm self-test start");
+
+    if (hhdm_request.response == 0) {
+        scdk_panic("vmm requires hhdm response");
+    }
+    hhdm_offset = hhdm_request.response->offset;
+
+    status = scdk_vmm_init(hhdm_offset);
+    require_status("vmm init", status, SCDK_OK);
+
+    status = scdk_vmm_current_root(&cr3_phys);
+    require_status("vmm current root", status, SCDK_OK);
+    if ((cr3_phys & (SCDK_PAGE_SIZE - 1u)) != 0u || cr3_phys == 0u) {
+        scdk_panic("vmm invalid cr3 0x%llx", (unsigned long long)cr3_phys);
+    }
+    scdk_log_write("test", "vmm cr3 inspect pass");
+
+    status = scdk_page_alloc(&data_phys);
+    require_status("vmm test page alloc", status, SCDK_OK);
+
+    hhdm_view = (volatile uint64_t *)(uintptr_t)(hhdm_offset + data_phys);
+    hhdm_view[0] = 0;
+    hhdm_view[1] = 0;
+
+    status = scdk_vmm_map_page(SCDK_VMM_SELFTEST_VIRT,
+                               data_phys,
+                               SCDK_VMM_MAP_WRITE);
+    require_status("vmm map page", status, SCDK_OK);
+
+    status = scdk_vmm_virt_to_phys(SCDK_VMM_SELFTEST_VIRT, &translated, &flags);
+    require_status("vmm translate mapped page", status, SCDK_OK);
+    if (translated != data_phys || (flags & SCDK_VMM_MAP_WRITE) == 0u) {
+        scdk_panic("vmm translation mismatch");
+    }
+    scdk_log_write("test", "vmm page table translation pass");
+
+    mapped = (volatile uint64_t *)(uintptr_t)SCDK_VMM_SELFTEST_VIRT;
+    mapped[0] = 0x5343444b564d4d31ull;
+    mapped[1] = 0x123456789abcdef0ull;
+    if (mapped[0] != 0x5343444b564d4d31ull ||
+        mapped[1] != 0x123456789abcdef0ull ||
+        hhdm_view[0] != 0x5343444b564d4d31ull ||
+        hhdm_view[1] != 0x123456789abcdef0ull) {
+        scdk_panic("vmm mapped page read/write mismatch");
+    }
+    scdk_log_write("test", "vmm mapped page read/write pass");
+
+    status = scdk_vmm_unmap_page(SCDK_VMM_SELFTEST_VIRT);
+    require_status("vmm unmap page", status, SCDK_OK);
+
+    status = scdk_vmm_virt_to_phys(SCDK_VMM_SELFTEST_VIRT, &translated, &flags);
+    require_status("vmm unmapped lookup rejected", status, SCDK_ERR_NOENT);
+
+    scdk_vmm_page_fault_placeholder(SCDK_VMM_SELFTEST_VIRT, 0);
+
+    status = scdk_page_free(data_phys);
+    require_status("vmm test page free", status, SCDK_OK);
+
+    scdk_log_write("boot", "vmm initialized");
+}
+
+static void run_scheduler_selftest(void) {
+    scdk_cap_t boot_task = 0;
+    scdk_cap_t boot_thread = 0;
+    scdk_cap_t current_task = 0;
+    scdk_cap_t current_thread = 0;
+    scdk_cap_t main_thread = 0;
+    scdk_object_id_t owning_task = 0;
+    uint32_t thread_state = SCDK_THREAD_NONE;
+    const struct scdk_cap_entry *task_entry = 0;
+    scdk_status_t status;
+
+    scdk_log_write("test", "scheduler self-test start");
+
+    status = scdk_scheduler_init(&boot_task, &boot_thread);
+    require_status("scheduler init", status, SCDK_OK);
+
+    status = scdk_cap_check(boot_task, SCDK_RIGHT_READ, SCDK_OBJ_TASK, &task_entry);
+    require_status("scheduler task cap", status, SCDK_OK);
+
+    status = scdk_cap_check(boot_thread, SCDK_RIGHT_READ, SCDK_OBJ_THREAD, 0);
+    require_status("scheduler thread cap", status, SCDK_OK);
+
+    status = scdk_scheduler_current_task(&current_task);
+    require_status("scheduler current task", status, SCDK_OK);
+    if (current_task != boot_task) {
+        scdk_panic("scheduler current task mismatch");
+    }
+
+    status = scdk_scheduler_current_thread(&current_thread);
+    require_status("scheduler current thread", status, SCDK_OK);
+    if (current_thread != boot_thread) {
+        scdk_panic("scheduler current thread mismatch");
+    }
+
+    status = scdk_task_main_thread(boot_task, &main_thread);
+    require_status("scheduler task main thread", status, SCDK_OK);
+    if (main_thread != boot_thread) {
+        scdk_panic("scheduler main thread mismatch");
+    }
+
+    status = scdk_thread_task_id(boot_thread, &owning_task);
+    require_status("scheduler thread task owner", status, SCDK_OK);
+    if (owning_task != task_entry->object_id) {
+        scdk_panic("scheduler thread owner mismatch");
+    }
+
+    status = scdk_thread_state(boot_thread, &thread_state);
+    require_status("scheduler thread state", status, SCDK_OK);
+    if (thread_state != SCDK_THREAD_RUNNING) {
+        scdk_panic("scheduler boot thread not running");
+    }
+
+    status = scdk_scheduler_yield_stub();
+    require_status("scheduler yield stub", status, SCDK_OK);
+
+    current_task = 0;
+    current_thread = 0;
+    status = scdk_scheduler_current_task(&current_task);
+    require_status("scheduler current task after yield", status, SCDK_OK);
+    status = scdk_scheduler_current_thread(&current_thread);
+    require_status("scheduler current thread after yield", status, SCDK_OK);
+    if (current_task != boot_task || current_thread != boot_thread) {
+        scdk_panic("scheduler yield changed current context");
+    }
+    scdk_log_write("test", "scheduler yield preserves context pass");
+
+    scdk_log_write("boot", "scheduler initialized");
+}
+
 __attribute__((noreturn)) static void idle_forever(void) {
     for (;;) {
         __asm__ volatile ("hlt");
@@ -389,7 +604,10 @@ void kmain(void) {
     run_endpoint_message_selftest();
     run_ring_selftest();
     run_grant_selftest();
+    run_pmm_selftest();
+    run_vmm_selftest();
+    run_scheduler_selftest();
 
-    scdk_log_write("boot", "milestone 7 complete");
+    scdk_log_write("boot", "milestone 10 complete");
     idle_forever();
 }
