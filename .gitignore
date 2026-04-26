@@ -1,0 +1,9 @@
+.codex
+.devtools/build/
+.devtools/cross/
+.devtools/limine.h
+.devtools/limine/
+.devtools/sources/
+build/
+*.o
+*.iso
