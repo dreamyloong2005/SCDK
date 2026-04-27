@@ -7,6 +7,7 @@
 #include <stdint.h>
 
 #include <scdk/framebuffer.h>
+#include <scdk/initrd.h>
 #include <scdk/log.h>
 #include <scdk/panic.h>
 #include <scdk/selftest.h>
@@ -55,6 +56,15 @@ static volatile struct limine_executable_address_request executable_address_requ
     .id = LIMINE_EXECUTABLE_ADDRESS_REQUEST_ID,
     .revision = 0,
     .response = 0
+};
+
+__attribute__((used, section(".limine_requests")))
+static volatile struct limine_module_request module_request = {
+    .id = LIMINE_MODULE_REQUEST_ID,
+    .revision = 0,
+    .response = 0,
+    .internal_module_count = 0,
+    .internal_modules = 0
 };
 
 __attribute__((used, section(".limine_requests_end")))
@@ -142,12 +152,13 @@ void kmain(void) {
         hhdm_offset = hhdm_request.response->offset;
     }
 
+    scdk_initrd_set_limine_response(module_request.response);
     scdk_selftest_set_boot_context(memmap_request.response, hhdm_offset);
     status = scdk_run_core_selftests();
     if (status != SCDK_OK) {
         scdk_panic("core self-tests failed: %lld", (long long)status);
     }
 
-    scdk_log_write("boot", "milestone 17 complete");
+    scdk_log_write("boot", "milestone 22 complete");
     idle_forever();
 }

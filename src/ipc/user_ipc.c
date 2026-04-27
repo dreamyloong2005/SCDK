@@ -134,17 +134,18 @@ static scdk_status_t validate_user_message_target(scdk_cap_t endpoint_cap,
     return SCDK_OK;
 }
 
-static scdk_status_t prepare_user_write_message(struct scdk_message *msg,
-                                                char *write_buffer,
-                                                size_t buffer_size) {
+static scdk_status_t prepare_user_buffer_arg(struct scdk_message *msg,
+                                             char *buffer,
+                                             size_t buffer_size) {
     uint64_t length;
     scdk_status_t status;
 
-    if (msg == 0 || write_buffer == 0 || buffer_size == 0u) {
+    if (msg == 0 || buffer == 0 || buffer_size == 0u) {
         return SCDK_ERR_INVAL;
     }
 
-    if (msg->type != SCDK_MSG_WRITE) {
+    if (msg->type != SCDK_MSG_WRITE &&
+        msg->type != SCDK_MSG_PROCESS_SPAWN) {
         return SCDK_ERR_NOTSUP;
     }
 
@@ -156,21 +157,21 @@ static scdk_status_t prepare_user_write_message(struct scdk_message *msg,
     }
 
     status = scdk_user_copy_from((uintptr_t)msg->arg0,
-                                 write_buffer,
+                                 buffer,
                                  (size_t)length);
     if (status != SCDK_OK) {
         return status;
     }
 
-    write_buffer[length] = '\0';
-    msg->arg0 = (uint64_t)(uintptr_t)write_buffer;
+    buffer[length] = '\0';
+    msg->arg0 = (uint64_t)(uintptr_t)buffer;
     msg->arg1 = length;
     return SCDK_OK;
 }
 
 scdk_status_t scdk_sys_endpoint_call(scdk_cap_t endpoint_cap,
                                      uintptr_t user_message_ptr) {
-    char write_buffer[SCDK_USER_IPC_MAX_WRITE + 1u];
+    char payload_buffer[SCDK_USER_IPC_MAX_WRITE + 1u];
     struct scdk_message msg;
     scdk_status_t status;
 
@@ -194,7 +195,7 @@ scdk_status_t scdk_sys_endpoint_call(scdk_cap_t endpoint_cap,
         return status;
     }
 
-    status = prepare_user_write_message(&msg, write_buffer, sizeof(write_buffer));
+    status = prepare_user_buffer_arg(&msg, payload_buffer, sizeof(payload_buffer));
     if (status != SCDK_OK) {
         msg.status = (uint64_t)status;
         (void)scdk_user_copy_to(user_message_ptr, &msg, sizeof(msg));

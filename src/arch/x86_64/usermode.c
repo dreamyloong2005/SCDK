@@ -9,6 +9,7 @@
 
 #include <scdk/address_space.h>
 #include <scdk/capability.h>
+#include <scdk/heap.h>
 #include <scdk/log.h>
 #include <scdk/mm.h>
 #include <scdk/object.h>
@@ -31,6 +32,8 @@
 
 #define GDT_FLAGS_LONG_CODE 0xau
 #define GDT_FLAGS_DATA      0xcu
+
+#define SCDK_USERMODE_MAX_FLAT_PAGES 4u
 
 struct gdt_pointer {
     uint16_t limit;
@@ -258,6 +261,184 @@ scdk_status_t scdk_usermode_run_task_test(scdk_cap_t aspace,
     }
 
     return run_stub_in_aspace(aspace, hhdm_offset);
+}
+
+scdk_status_t scdk_usermode_run_flat_image(scdk_cap_t aspace,
+                                           scdk_cap_t thread,
+                                           uintptr_t entry,
+                                           const void *image,
+                                           size_t image_size,
+                                           scdk_cap_t bootstrap_endpoint,
+                                           uint64_t hhdm_offset) {
+    struct scdk_syscall_task_state saved_syscall_state;
+    void *task_syscall_stack = 0;
+    uint64_t boot_root = 0;
+    uint64_t code_phys[SCDK_USERMODE_MAX_FLAT_PAGES] = { 0 };
+    uint64_t stack_phys = 0;
+    uint32_t code_pages;
+    uint32_t mapped_code_pages = 0;
+    bool stack_mapped = false;
+    bool boot_root_valid = false;
+    bool saved_syscall_state_valid = false;
+    bool task_user_exited = false;
+    bool task_endpoint_call_passed = false;
+    scdk_status_t status;
+
+    if (aspace == 0 ||
+        thread == 0 ||
+        entry == 0u ||
+        image == 0 ||
+        image_size == 0u ||
+        bootstrap_endpoint == 0 ||
+        hhdm_offset == 0u) {
+        return SCDK_ERR_INVAL;
+    }
+
+    if ((entry & (SCDK_PAGE_SIZE - 1u)) != 0u ||
+        entry < SCDK_USER_VIRT_BASE ||
+        entry > SCDK_USER_VIRT_TOP - SCDK_PAGE_SIZE) {
+        return SCDK_ERR_BOUNDS;
+    }
+
+    code_pages = (uint32_t)((image_size + SCDK_PAGE_SIZE - 1u) / SCDK_PAGE_SIZE);
+    if (code_pages == 0u || code_pages > SCDK_USERMODE_MAX_FLAT_PAGES) {
+        return SCDK_ERR_BOUNDS;
+    }
+
+    if (entry > SCDK_USER_VIRT_TOP -
+                ((uintptr_t)code_pages * SCDK_PAGE_SIZE)) {
+        return SCDK_ERR_BOUNDS;
+    }
+
+    status = scdk_cap_check(thread, SCDK_RIGHT_READ, SCDK_OBJ_THREAD, 0);
+    if (status != SCDK_OK) {
+        return status;
+    }
+
+    status = scdk_cap_check(bootstrap_endpoint, SCDK_RIGHT_SEND, SCDK_OBJ_ENDPOINT, 0);
+    if (status != SCDK_OK) {
+        return status;
+    }
+
+    scdk_syscall_save_task_state(&saved_syscall_state);
+    saved_syscall_state_valid = true;
+
+    status = scdk_vmm_current_root(&boot_root);
+    if (status != SCDK_OK) {
+        goto cleanup;
+    }
+    boot_root_valid = true;
+
+    task_syscall_stack = scdk_kalloc(SCDK_PAGE_SIZE);
+    if (task_syscall_stack == 0) {
+        status = SCDK_ERR_NOMEM;
+        goto cleanup;
+    }
+
+    status = scdk_usermode_init((uint64_t)(uintptr_t)task_syscall_stack + SCDK_PAGE_SIZE);
+    if (status != SCDK_OK) {
+        goto cleanup;
+    }
+
+    for (uint32_t i = 0; i < code_pages; i++) {
+        uintptr_t page = (uintptr_t)(hhdm_offset + code_phys[i]);
+        size_t copied = i * (size_t)SCDK_PAGE_SIZE;
+        size_t remaining = image_size - copied;
+        size_t to_copy = remaining < SCDK_PAGE_SIZE ? remaining : SCDK_PAGE_SIZE;
+
+        status = scdk_page_alloc(&code_phys[i]);
+        if (status != SCDK_OK) {
+            goto cleanup;
+        }
+
+        page = (uintptr_t)(hhdm_offset + code_phys[i]);
+        memset((void *)page, 0, SCDK_PAGE_SIZE);
+        memcpy((void *)page, (const uint8_t *)image + copied, to_copy);
+
+        status = scdk_address_space_map(aspace,
+                                        entry + ((uintptr_t)i * SCDK_PAGE_SIZE),
+                                        code_phys[i],
+                                        0);
+        if (status != SCDK_OK) {
+            goto cleanup;
+        }
+
+        mapped_code_pages++;
+    }
+
+    status = scdk_page_alloc(&stack_phys);
+    if (status != SCDK_OK) {
+        goto cleanup;
+    }
+
+    memset((void *)(uintptr_t)(hhdm_offset + stack_phys), 0, SCDK_PAGE_SIZE);
+    status = scdk_address_space_map(aspace,
+                                    SCDK_USER_TEST_STACK_TOP - SCDK_PAGE_SIZE,
+                                    stack_phys,
+                                    SCDK_VMM_MAP_WRITE);
+    if (status != SCDK_OK) {
+        goto cleanup;
+    }
+    stack_mapped = true;
+
+    status = scdk_address_space_activate(aspace);
+    if (status != SCDK_OK) {
+        goto cleanup;
+    }
+
+    scdk_enter_usermode_asm(entry, SCDK_USER_TEST_STACK_TOP, bootstrap_endpoint);
+    task_user_exited = scdk_syscall_user_exited();
+    task_endpoint_call_passed = scdk_syscall_endpoint_call_passed();
+
+    status = scdk_vmm_activate_root(boot_root);
+    boot_root_valid = false;
+    if (status != SCDK_OK) {
+        goto cleanup;
+    }
+
+    if (!usermode_initialized ||
+        !task_user_exited ||
+        !task_endpoint_call_passed) {
+        status = SCDK_ERR_BUSY;
+        goto cleanup;
+    }
+
+    status = SCDK_OK;
+
+cleanup:
+    if (boot_root_valid) {
+        (void)scdk_vmm_activate_root(boot_root);
+    }
+
+    if (stack_mapped) {
+        (void)scdk_address_space_unmap(aspace,
+                                       SCDK_USER_TEST_STACK_TOP - SCDK_PAGE_SIZE);
+    }
+
+    for (uint32_t i = 0; i < mapped_code_pages; i++) {
+        (void)scdk_address_space_unmap(aspace,
+                                       entry + ((uintptr_t)i * SCDK_PAGE_SIZE));
+    }
+
+    if (stack_phys != 0u) {
+        (void)scdk_page_free(stack_phys);
+    }
+
+    for (uint32_t i = 0; i < code_pages; i++) {
+        if (code_phys[i] != 0u) {
+            (void)scdk_page_free(code_phys[i]);
+        }
+    }
+
+    if (saved_syscall_state_valid) {
+        scdk_syscall_restore_task_state(&saved_syscall_state);
+    }
+
+    if (task_syscall_stack != 0) {
+        scdk_kfree(task_syscall_stack);
+    }
+
+    return status;
 }
 
 scdk_status_t scdk_usermode_run_builtin_test(uint64_t hhdm_offset) {

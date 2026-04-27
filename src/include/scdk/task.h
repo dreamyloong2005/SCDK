@@ -4,6 +4,8 @@
 #ifndef SCDK_TASK_H
 #define SCDK_TASK_H
 
+#include <stddef.h>
+
 #include <scdk/scheduler.h>
 
 typedef scdk_object_id_t scdk_task_id_t;
@@ -37,6 +39,16 @@ scdk_status_t scdk_user_thread_create(scdk_cap_t task,
  */
 scdk_status_t scdk_user_task_run_builtin(scdk_cap_t task,
                                          uint64_t hhdm_offset);
+
+/*
+ * Control-plane loader path: run a flat executable image in a NEW user task's
+ * address space and return after the task exits through SCDK_SYS_EXIT.
+ */
+scdk_status_t scdk_user_task_run_flat(scdk_cap_t task,
+                                      const void *image,
+                                      size_t image_size,
+                                      scdk_cap_t bootstrap_endpoint,
+                                      uint64_t hhdm_offset);
 
 /*
  * Control-plane: mark a user task dead after the user exit path returns.

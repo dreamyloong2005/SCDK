@@ -22,6 +22,7 @@ enum scdk_object_type {
     SCDK_OBJ_RING,
     SCDK_OBJ_GRANT,
     SCDK_OBJ_SERVICE,
+    SCDK_OBJ_FILE,
     SCDK_OBJ_DEVICE,
     SCDK_OBJ_DEVICE_QUEUE,
 };

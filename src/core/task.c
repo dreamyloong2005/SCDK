@@ -4,6 +4,7 @@
 #include <scdk/task.h>
 
 #include <stdbool.h>
+#include <stddef.h>
 #include <stdint.h>
 
 #include <scdk/address_space.h>
@@ -250,6 +251,54 @@ scdk_status_t scdk_user_task_run_builtin(scdk_cap_t task,
                                          thread_slot->thread_cap,
                                          hhdm_offset);
     if (status != SCDK_OK) {
+        return status;
+    }
+
+    return scdk_task_exit(task, 0);
+}
+
+scdk_status_t scdk_user_task_run_flat(scdk_cap_t task,
+                                      const void *image,
+                                      size_t image_size,
+                                      scdk_cap_t bootstrap_endpoint,
+                                      uint64_t hhdm_offset) {
+    struct scdk_user_task_slot *task_slot = 0;
+    struct scdk_user_thread_slot *thread_slot = 0;
+    scdk_status_t status;
+
+    if (image == 0 || image_size == 0u) {
+        return SCDK_ERR_INVAL;
+    }
+
+    status = task_slot_for_cap(task, &task_slot);
+    if (status != SCDK_OK) {
+        return status;
+    }
+
+    status = thread_slot_for_cap(task_slot->main_thread_cap, &thread_slot);
+    if (status != SCDK_OK) {
+        return status;
+    }
+
+    if (task_slot->state != SCDK_TASK_NEW ||
+        thread_slot->state != SCDK_THREAD_NEW) {
+        return SCDK_ERR_BUSY;
+    }
+
+    task_slot->state = SCDK_TASK_RUNNING;
+    thread_slot->state = SCDK_THREAD_RUNNING;
+    scdk_log_write("task", "main thread started");
+
+    status = scdk_usermode_run_flat_image(task_slot->address_space_cap,
+                                          thread_slot->thread_cap,
+                                          thread_slot->instruction_pointer,
+                                          image,
+                                          image_size,
+                                          bootstrap_endpoint,
+                                          hhdm_offset);
+    if (status != SCDK_OK) {
+        task_slot->state = SCDK_TASK_DEAD;
+        thread_slot->state = SCDK_THREAD_DEAD;
         return status;
     }
 

@@ -21,6 +21,10 @@ enum scdk_msg_type {
 
     SCDK_MSG_SERVICE_REGISTER,
     SCDK_MSG_SERVICE_LOOKUP,
+
+    SCDK_MSG_PROCESS_SPAWN,
+    SCDK_MSG_PROCESS_EXIT,
+    SCDK_MSG_PROCESS_WAIT_STUB,
 };
 
 struct scdk_message {

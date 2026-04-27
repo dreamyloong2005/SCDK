@@ -10,6 +10,22 @@
 #include <scdk/syscall_numbers.h>
 #include <scdk/types.h>
 
+struct scdk_syscall_task_state {
+    uint64_t kernel_stack_top;
+    uint64_t user_rsp;
+    uint64_t user_rip;
+    uint64_t user_rflags;
+    uint64_t arg0;
+    uint64_t arg1;
+    uint64_t arg2;
+    uint64_t arg3;
+    uint64_t return_value;
+    uint64_t user_return_rsp;
+    uint64_t user_return_rip;
+    bool user_exited;
+    bool endpoint_call_passed;
+};
+
 /*
  * Control-plane: initialize the minimal x86_64 syscall entry path.
  * Milestone 16 supports debug-write, endpoint-call, yield, and exit.
@@ -25,6 +41,18 @@ bool scdk_syscall_ready(void);
  * Control-plane diagnostic: reset per-user-stub syscall observations.
  */
 void scdk_syscall_reset_task_state(void);
+
+/*
+ * Control-plane: preserve the current minimal syscall/user return state while
+ * a kernel service runs another user task from inside a syscall path.
+ */
+void scdk_syscall_save_task_state(struct scdk_syscall_task_state *out_state);
+
+/*
+ * Control-plane: restore syscall/user return state saved before a nested user
+ * task run.
+ */
+void scdk_syscall_restore_task_state(const struct scdk_syscall_task_state *state);
 
 /*
  * Architecture entry helper called from the syscall assembly path.

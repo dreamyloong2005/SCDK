@@ -18,11 +18,11 @@ user-space compatibility layer, but it is not the native kernel API.
 
 ## Version
 
-Current version: `0.2.0-alpha.2`
+Current version: `0.3.0-alpha.1`
 
 ## Current Milestone
 
-This tree currently implements Milestone 0 through Milestone 17:
+This tree currently implements Milestone 0 through Milestone 22:
 
 - Limine bootable ISO
 - higher-half x86_64 freestanding kernel ELF
@@ -74,8 +74,21 @@ This tree currently implements Milestone 0 through Milestone 17:
 - user-mode console write routed through syscall, endpoint, message, and service
 - minimal user task lifecycle with address-space and main-thread objects
 - user task run, exit, and cleanup self-tests
+- Limine initrd module loading
+- small ustar-backed initrd parser with list/find self-tests
+- initrd-backed tmpfs service endpoint
+- tmpfs open/read/close message path with file capabilities
+- tmpfs write-not-supported self-test
+- SCDK-native VFS service mounted over tmpfs at /
+- VFS open/read/close routing through endpoint/message
+- flat `/init` and `/hello` user executables built into the initrd
+- minimal loader that reads flat user executables through VFS
+- loader-created user task, address space, and main thread
+- `/hello` console write routed through syscall, endpoint, message, and service
+- kernel-resident process manager service endpoint
+- `/init` spawn request routed through syscall, endpoint, proc service, VFS, and loader
 
-Filesystem and user-space support are intentionally not implemented yet.
+Full filesystem and full user-space support are intentionally not implemented yet.
 
 ## Build
 
@@ -138,8 +151,35 @@ Expected serial output includes:
 [task] main thread started
 [task] user task exited
 [task] cleanup pass
+[initrd] found module
+[initrd] file: /init
+[initrd] file: /hello
+[initrd] file: /etc/scdk.conf
+[initrd] file: /hello.txt
+[initrd] list pass
+[tmpfs] service started
+[tmpfs] open /hello.txt pass
+[tmpfs] read /hello.txt pass
+[vfs] service started
+[vfs] mount tmpfs at / pass
+[vfs] open /hello.txt pass
+[vfs] read /hello.txt pass
+[loader] loading /hello
+[loader] loaded /hello
+[loader] mapped /hello
+[user] hello from spawned process
+[loader] /hello start pass
+[proc] service started
+[loader] loading /init
+[loader] loaded /init
+[loader] mapped /init
+[proc] spawn /hello
+[loader] loaded /hello
+[user] hello from spawned process
+[proc] process exited
+[loader] /init start pass
 [test] all core tests passed
-[boot] milestone 17 complete
+[boot] milestone 22 complete
 ```
 
 ## VMware

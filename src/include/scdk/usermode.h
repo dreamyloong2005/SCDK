@@ -4,6 +4,7 @@
 #ifndef SCDK_USERMODE_H
 #define SCDK_USERMODE_H
 
+#include <stddef.h>
 #include <stdint.h>
 
 #include <scdk/capability.h>
@@ -31,5 +32,17 @@ scdk_status_t scdk_usermode_run_builtin_test(uint64_t hhdm_offset);
 scdk_status_t scdk_usermode_run_task_test(scdk_cap_t aspace,
                                           scdk_cap_t thread,
                                           uint64_t hhdm_offset);
+
+/*
+ * Control-plane loader path: map a flat executable image into an existing user
+ * task address space, enter ring 3 at entry, and return through SCDK_SYS_EXIT.
+ */
+scdk_status_t scdk_usermode_run_flat_image(scdk_cap_t aspace,
+                                           scdk_cap_t thread,
+                                           uintptr_t entry,
+                                           const void *image,
+                                           size_t image_size,
+                                           scdk_cap_t bootstrap_endpoint,
+                                           uint64_t hhdm_offset);
 
 #endif

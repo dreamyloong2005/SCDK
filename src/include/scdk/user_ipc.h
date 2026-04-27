@@ -11,6 +11,7 @@
 #include <scdk/types.h>
 
 #define SCDK_USER_IPC_MAX_WRITE 256u
+#define SCDK_USER_IPC_MAX_PATH 128u
 
 /*
  * Control-plane: validate and copy bytes from the current user address space.

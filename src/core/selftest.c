@@ -11,17 +11,23 @@
 #include <scdk/endpoint.h>
 #include <scdk/grant.h>
 #include <scdk/heap.h>
+#include <scdk/initrd.h>
+#include <scdk/loader.h>
 #include <scdk/log.h>
 #include <scdk/message.h>
 #include <scdk/mm.h>
 #include <scdk/object.h>
 #include <scdk/panic.h>
+#include <scdk/proc_service.h>
 #include <scdk/ring.h>
 #include <scdk/scheduler.h>
 #include <scdk/service.h>
+#include <scdk/string.h>
 #include <scdk/task.h>
 #include <scdk/thread.h>
+#include <scdk/tmpfs.h>
 #include <scdk/usermode.h>
+#include <scdk/vfs.h>
 
 #define SCDK_VMM_SELFTEST_VIRT 0xffffffffc0000000ull
 #define SCDK_ASPACE_SELFTEST_VIRT 0x0000000000400000ull
@@ -824,6 +830,358 @@ static void run_user_task_lifecycle_selftest(void) {
     scdk_log_write("test", "user task lifecycle: pass");
 }
 
+static void run_initrd_selftest(void) {
+    struct scdk_initrd_file file;
+    scdk_status_t status;
+
+    scdk_log_write("test", "initrd self-test start");
+
+    status = scdk_initrd_init_from_limine();
+    require_status("initrd init", status, SCDK_OK);
+
+    status = scdk_initrd_list();
+    require_status("initrd list", status, SCDK_OK);
+
+    status = scdk_initrd_find("/init", &file);
+    require_status("initrd find /init", status, SCDK_OK);
+    if (file.data == 0 || file.size == 0u) {
+        scdk_panic("initrd /init has no data");
+    }
+
+    status = scdk_initrd_find("/etc/scdk.conf", &file);
+    require_status("initrd find /etc/scdk.conf", status, SCDK_OK);
+    if (file.data == 0 || file.size == 0u) {
+        scdk_panic("initrd /etc/scdk.conf has no data");
+    }
+
+    status = scdk_initrd_find("/hello.txt", &file);
+    require_status("initrd find /hello.txt", status, SCDK_OK);
+    if (file.data == 0 || file.size == 0u) {
+        scdk_panic("initrd /hello.txt has no data");
+    }
+
+    status = scdk_initrd_find("/hello", &file);
+    require_status("initrd find /hello", status, SCDK_OK);
+    if (file.data == 0 || file.size == 0u) {
+        scdk_panic("initrd /hello has no data");
+    }
+
+    scdk_log_write("test", "initrd: pass");
+}
+
+static scdk_status_t tmpfs_open_path(scdk_cap_t endpoint,
+                                     const char *path,
+                                     scdk_cap_t *out_file) {
+    struct scdk_message msg;
+    scdk_status_t status;
+
+    if (path == 0 || out_file == 0) {
+        return SCDK_ERR_INVAL;
+    }
+
+    scdk_message_init(&msg, 0, SCDK_SERVICE_TMPFS, SCDK_MSG_OPEN);
+    msg.arg0 = (uint64_t)(uintptr_t)path;
+    msg.arg1 = 0;
+
+    status = scdk_endpoint_call(endpoint, &msg);
+    if (status != SCDK_OK) {
+        return status;
+    }
+
+    *out_file = (scdk_cap_t)msg.arg0;
+    return msg.arg0 == 0u ? SCDK_ERR_NOENT : SCDK_OK;
+}
+
+static scdk_status_t tmpfs_read_file(scdk_cap_t endpoint,
+                                     scdk_cap_t file,
+                                     char *buffer,
+                                     uint64_t buffer_size,
+                                     uint64_t *out_read) {
+    struct scdk_message msg;
+    scdk_status_t status;
+
+    if (buffer == 0 || buffer_size == 0u || out_read == 0) {
+        return SCDK_ERR_INVAL;
+    }
+
+    scdk_message_init(&msg, 0, SCDK_SERVICE_TMPFS, SCDK_MSG_READ);
+    msg.arg0 = file;
+    msg.arg1 = 0;
+    msg.arg2 = (uint64_t)(uintptr_t)buffer;
+    msg.arg3 = buffer_size - 1u;
+
+    status = scdk_endpoint_call(endpoint, &msg);
+    if (status != SCDK_OK) {
+        return status;
+    }
+
+    *out_read = msg.arg0;
+    if (*out_read >= buffer_size) {
+        return SCDK_ERR_BOUNDS;
+    }
+
+    buffer[*out_read] = '\0';
+    return SCDK_OK;
+}
+
+static scdk_status_t tmpfs_close_file(scdk_cap_t endpoint,
+                                      scdk_cap_t file) {
+    struct scdk_message msg;
+
+    scdk_message_init(&msg, 0, SCDK_SERVICE_TMPFS, SCDK_MSG_CLOSE);
+    msg.arg0 = file;
+    return scdk_endpoint_call(endpoint, &msg);
+}
+
+static void run_tmpfs_selftest(void) {
+    scdk_cap_t endpoint = 0;
+    scdk_cap_t looked_up = 0;
+    scdk_cap_t hello_file = 0;
+    scdk_cap_t init_file = 0;
+    char buffer[128];
+    uint64_t bytes_read = 0;
+    scdk_status_t status;
+
+    scdk_log_write("test", "tmpfs self-test start");
+
+    status = scdk_tmpfs_service_init(&endpoint);
+    require_status("tmpfs service init", status, SCDK_OK);
+
+    status = scdk_service_lookup(SCDK_SERVICE_TMPFS, &looked_up);
+    require_status("tmpfs service lookup", status, SCDK_OK);
+    if (looked_up != endpoint) {
+        scdk_panic("tmpfs service endpoint mismatch");
+    }
+
+    status = tmpfs_open_path(looked_up, "/hello.txt", &hello_file);
+    require_status("tmpfs open /hello.txt", status, SCDK_OK);
+    scdk_log_write("tmpfs", "open /hello.txt pass");
+
+    status = tmpfs_read_file(looked_up,
+                             hello_file,
+                             buffer,
+                             sizeof(buffer),
+                             &bytes_read);
+    require_status("tmpfs read /hello.txt", status, SCDK_OK);
+    if (bytes_read < 5u || memcmp(buffer, "hello", 5u) != 0) {
+        scdk_panic("tmpfs /hello.txt content mismatch");
+    }
+    scdk_log_write("tmpfs", "read /hello.txt pass");
+
+    status = tmpfs_open_path(looked_up, "/init", &init_file);
+    require_status("tmpfs open /init", status, SCDK_OK);
+
+    status = tmpfs_read_file(looked_up,
+                             init_file,
+                             buffer,
+                             sizeof(buffer),
+                             &bytes_read);
+    require_status("tmpfs read /init", status, SCDK_OK);
+    if (bytes_read == 0u) {
+        scdk_panic("tmpfs /init read no data");
+    }
+    scdk_log_write("test", "tmpfs read /init pass");
+
+    struct scdk_message write_msg;
+    scdk_message_init(&write_msg, 0, SCDK_SERVICE_TMPFS, SCDK_MSG_WRITE);
+    write_msg.arg0 = hello_file;
+    write_msg.arg1 = 0;
+    write_msg.arg2 = (uint64_t)(uintptr_t)"ignored";
+    write_msg.arg3 = 7u;
+    status = scdk_endpoint_call(looked_up, &write_msg);
+    require_status("tmpfs write rejected", status, SCDK_ERR_NOTSUP);
+
+    status = tmpfs_close_file(looked_up, hello_file);
+    require_status("tmpfs close /hello.txt", status, SCDK_OK);
+
+    status = tmpfs_close_file(looked_up, init_file);
+    require_status("tmpfs close /init", status, SCDK_OK);
+
+    scdk_log_write("test", "tmpfs: pass");
+}
+
+static scdk_status_t vfs_open_path(scdk_cap_t endpoint,
+                                   const char *path,
+                                   scdk_cap_t *out_file) {
+    struct scdk_message msg;
+    scdk_status_t status;
+
+    if (path == 0 || out_file == 0) {
+        return SCDK_ERR_INVAL;
+    }
+
+    scdk_message_init(&msg, 0, SCDK_SERVICE_VFS, SCDK_MSG_OPEN);
+    msg.arg0 = (uint64_t)(uintptr_t)path;
+    msg.arg1 = 0;
+
+    status = scdk_endpoint_call(endpoint, &msg);
+    if (status != SCDK_OK) {
+        return status;
+    }
+
+    *out_file = (scdk_cap_t)msg.arg0;
+    return msg.arg0 == 0u ? SCDK_ERR_NOENT : SCDK_OK;
+}
+
+static scdk_status_t vfs_read_file(scdk_cap_t endpoint,
+                                   scdk_cap_t file,
+                                   char *buffer,
+                                   uint64_t buffer_size,
+                                   uint64_t *out_read) {
+    struct scdk_message msg;
+    scdk_status_t status;
+
+    if (buffer == 0 || buffer_size == 0u || out_read == 0) {
+        return SCDK_ERR_INVAL;
+    }
+
+    scdk_message_init(&msg, 0, SCDK_SERVICE_VFS, SCDK_MSG_READ);
+    msg.arg0 = file;
+    msg.arg1 = 0;
+    msg.arg2 = (uint64_t)(uintptr_t)buffer;
+    msg.arg3 = buffer_size - 1u;
+
+    status = scdk_endpoint_call(endpoint, &msg);
+    if (status != SCDK_OK) {
+        return status;
+    }
+
+    *out_read = msg.arg0;
+    if (*out_read >= buffer_size) {
+        return SCDK_ERR_BOUNDS;
+    }
+
+    buffer[*out_read] = '\0';
+    return SCDK_OK;
+}
+
+static scdk_status_t vfs_close_file(scdk_cap_t endpoint,
+                                    scdk_cap_t file) {
+    struct scdk_message msg;
+
+    scdk_message_init(&msg, 0, SCDK_SERVICE_VFS, SCDK_MSG_CLOSE);
+    msg.arg0 = file;
+    return scdk_endpoint_call(endpoint, &msg);
+}
+
+static void run_vfs_selftest(void) {
+    scdk_cap_t endpoint = 0;
+    scdk_cap_t looked_up = 0;
+    scdk_cap_t hello_file = 0;
+    char buffer[128];
+    uint64_t bytes_read = 0;
+    scdk_status_t status;
+
+    scdk_log_write("test", "vfs self-test start");
+
+    status = scdk_vfs_service_init(&endpoint);
+    require_status("vfs service init", status, SCDK_OK);
+
+    status = scdk_service_lookup(SCDK_SERVICE_VFS, &looked_up);
+    require_status("vfs service lookup", status, SCDK_OK);
+    if (looked_up != endpoint) {
+        scdk_panic("vfs service endpoint mismatch");
+    }
+
+    status = vfs_open_path(looked_up, "/hello.txt", &hello_file);
+    require_status("vfs open /hello.txt", status, SCDK_OK);
+    scdk_log_write("vfs", "open /hello.txt pass");
+
+    status = vfs_read_file(looked_up,
+                           hello_file,
+                           buffer,
+                           sizeof(buffer),
+                           &bytes_read);
+    require_status("vfs read /hello.txt", status, SCDK_OK);
+    if (bytes_read < 5u || memcmp(buffer, "hello", 5u) != 0) {
+        scdk_panic("vfs /hello.txt content mismatch");
+    }
+    scdk_log_write("vfs", "read /hello.txt pass");
+
+    status = vfs_close_file(looked_up, hello_file);
+    require_status("vfs close /hello.txt", status, SCDK_OK);
+
+    scdk_log_write("test", "vfs: pass");
+}
+
+static void run_loader_selftest(void) {
+    scdk_cap_t task = 0;
+    scdk_cap_t main_thread = 0;
+    uint32_t task_state = SCDK_TASK_NONE;
+    uint32_t thread_state = SCDK_THREAD_NONE;
+    scdk_status_t status;
+
+    scdk_log_write("test", "loader self-test start");
+
+    status = scdk_loader_load_from_vfs("/hello",
+                                       selftest_hhdm_offset,
+                                       &task,
+                                       &main_thread);
+    require_status("loader load /hello", status, SCDK_OK);
+
+    status = scdk_user_task_state(task, &task_state);
+    require_status("loader task dead state", status, SCDK_OK);
+    if (task_state != SCDK_TASK_DEAD) {
+        scdk_panic("loader task did not exit");
+    }
+
+    status = scdk_user_thread_state(main_thread, &thread_state);
+    require_status("loader main thread dead state", status, SCDK_OK);
+    if (thread_state != SCDK_THREAD_DEAD) {
+        scdk_panic("loader main thread did not exit");
+    }
+
+    status = scdk_task_cleanup(task);
+    require_status("loader task cleanup", status, SCDK_OK);
+
+    scdk_log_write("test", "loader: pass");
+}
+
+static void run_proc_selftest(void) {
+    scdk_cap_t endpoint = 0;
+    scdk_cap_t looked_up = 0;
+    scdk_cap_t init_task = 0;
+    scdk_cap_t init_thread = 0;
+    uint32_t task_state = SCDK_TASK_NONE;
+    uint32_t thread_state = SCDK_THREAD_NONE;
+    scdk_status_t status;
+
+    scdk_log_write("test", "proc self-test start");
+
+    status = scdk_proc_service_init(selftest_hhdm_offset, &endpoint);
+    require_status("proc service init", status, SCDK_OK);
+
+    status = scdk_service_lookup(SCDK_SERVICE_PROC, &looked_up);
+    require_status("proc service lookup", status, SCDK_OK);
+    if (looked_up != endpoint) {
+        scdk_panic("proc service endpoint mismatch");
+    }
+
+    status = scdk_loader_load_from_vfs_with_endpoint("/init",
+                                                     selftest_hhdm_offset,
+                                                     looked_up,
+                                                     &init_task,
+                                                     &init_thread);
+    require_status("proc /init requested spawn", status, SCDK_OK);
+
+    status = scdk_user_task_state(init_task, &task_state);
+    require_status("proc init task dead state", status, SCDK_OK);
+    if (task_state != SCDK_TASK_DEAD) {
+        scdk_panic("proc /init task did not exit");
+    }
+
+    status = scdk_user_thread_state(init_thread, &thread_state);
+    require_status("proc init thread dead state", status, SCDK_OK);
+    if (thread_state != SCDK_THREAD_DEAD) {
+        scdk_panic("proc /init thread did not exit");
+    }
+
+    status = scdk_task_cleanup(init_task);
+    require_status("proc init task cleanup", status, SCDK_OK);
+
+    scdk_log_write("test", "proc: pass");
+}
+
 scdk_status_t scdk_run_core_selftests(void) {
     if (selftest_memmap == 0 || selftest_hhdm_offset == 0u) {
         return SCDK_ERR_INVAL;
@@ -840,6 +1198,11 @@ scdk_status_t scdk_run_core_selftests(void) {
     run_scheduler_selftest();
     run_usermode_selftest();
     run_user_task_lifecycle_selftest();
+    run_initrd_selftest();
+    run_tmpfs_selftest();
+    run_vfs_selftest();
+    run_loader_selftest();
+    run_proc_selftest();
 
     scdk_log_write("test", "all core tests passed");
     return SCDK_OK;
