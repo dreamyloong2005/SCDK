@@ -4,6 +4,7 @@
 #ifndef SCDK_USER_IPC_H
 #define SCDK_USER_IPC_H
 
+#include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
 
@@ -12,6 +13,13 @@
 
 #define SCDK_USER_IPC_MAX_WRITE 256u
 #define SCDK_USER_IPC_MAX_PATH 128u
+
+/*
+ * Control-plane: validate a current-user-address-space range without copying.
+ */
+scdk_status_t scdk_user_validate_range(uintptr_t user_ptr,
+                                       size_t size,
+                                       bool writable);
 
 /*
  * Control-plane: validate and copy bytes from the current user address space.

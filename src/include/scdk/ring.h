@@ -12,6 +12,11 @@
 #define SCDK_MAX_RINGS 64u
 #define SCDK_RING_MAX_ENTRIES 64u
 
+enum scdk_ring_op {
+    SCDK_RING_OP_NONE = 0,
+    SCDK_RING_OP_CONSOLE_WRITE = 1,
+};
+
 struct scdk_ring_desc {
     uint64_t op;
     uint64_t cap;
@@ -50,6 +55,20 @@ scdk_status_t scdk_ring_create(uint32_t owner_core,
                                uint32_t entries,
                                scdk_cap_t bound_target,
                                scdk_cap_t *out_ring);
+
+/*
+ * Control-plane: bind a ring to an endpoint capability.
+ * Requires SCDK_RIGHT_BIND on the ring and SCDK_RIGHT_SEND on the endpoint.
+ */
+scdk_status_t scdk_ring_bind_target(scdk_cap_t ring,
+                                    scdk_cap_t target);
+
+/*
+ * Control-plane: inspect the endpoint capability currently bound to a ring.
+ * Requires SCDK_RIGHT_READ on an SCDK_OBJ_RING capability.
+ */
+scdk_status_t scdk_ring_bound_target(scdk_cap_t ring,
+                                     scdk_cap_t *out_target);
 
 /*
  * Data-plane: submit one operation descriptor.

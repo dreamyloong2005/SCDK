@@ -25,6 +25,8 @@ enum scdk_msg_type {
     SCDK_MSG_PROCESS_SPAWN,
     SCDK_MSG_PROCESS_EXIT,
     SCDK_MSG_PROCESS_WAIT_STUB,
+
+    SCDK_MSG_RING_PROCESS,
 };
 
 struct scdk_message {

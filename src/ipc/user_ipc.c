@@ -36,9 +36,9 @@ static bool checked_user_end(uintptr_t user_ptr,
     return true;
 }
 
-static scdk_status_t validate_user_range(uintptr_t user_ptr,
-                                         size_t size,
-                                         bool writable) {
+scdk_status_t scdk_user_validate_range(uintptr_t user_ptr,
+                                       size_t size,
+                                       bool writable) {
     uintptr_t last;
     uintptr_t page;
 
@@ -86,7 +86,7 @@ scdk_status_t scdk_user_copy_from(uintptr_t user_ptr,
         return SCDK_ERR_INVAL;
     }
 
-    status = validate_user_range(user_ptr, size, false);
+    status = scdk_user_validate_range(user_ptr, size, false);
     if (status != SCDK_OK) {
         return status;
     }
@@ -104,7 +104,7 @@ scdk_status_t scdk_user_copy_to(uintptr_t user_ptr,
         return SCDK_ERR_INVAL;
     }
 
-    status = validate_user_range(user_ptr, size, true);
+    status = scdk_user_validate_range(user_ptr, size, true);
     if (status != SCDK_OK) {
         return status;
     }
@@ -195,11 +195,22 @@ scdk_status_t scdk_sys_endpoint_call(scdk_cap_t endpoint_cap,
         return status;
     }
 
-    status = prepare_user_buffer_arg(&msg, payload_buffer, sizeof(payload_buffer));
-    if (status != SCDK_OK) {
-        msg.status = (uint64_t)status;
+    switch (msg.type) {
+    case SCDK_MSG_WRITE:
+    case SCDK_MSG_PROCESS_SPAWN:
+        status = prepare_user_buffer_arg(&msg, payload_buffer, sizeof(payload_buffer));
+        if (status != SCDK_OK) {
+            msg.status = (uint64_t)status;
+            (void)scdk_user_copy_to(user_message_ptr, &msg, sizeof(msg));
+            return status;
+        }
+        break;
+    case SCDK_MSG_READ:
+        break;
+    default:
+        msg.status = (uint64_t)SCDK_ERR_NOTSUP;
         (void)scdk_user_copy_to(user_message_ptr, &msg, sizeof(msg));
-        return status;
+        return SCDK_ERR_NOTSUP;
     }
 
     status = scdk_endpoint_call(endpoint_cap, &msg);

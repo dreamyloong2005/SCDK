@@ -17,6 +17,7 @@ enum scdk_service_id {
     SCDK_SERVICE_TMPFS = 2,
     SCDK_SERVICE_VFS = 3,
     SCDK_SERVICE_PROC = 4,
+    SCDK_SERVICE_GRANT_TEST = 5,
 };
 
 /*

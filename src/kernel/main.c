@@ -159,6 +159,6 @@ void kmain(void) {
         scdk_panic("core self-tests failed: %lld", (long long)status);
     }
 
-    scdk_log_write("boot", "milestone 22 complete");
+    scdk_log_write("boot", "milestone 24 complete");
     idle_forever();
 }

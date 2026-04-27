@@ -26,11 +26,13 @@
 #include <scdk/task.h>
 #include <scdk/thread.h>
 #include <scdk/tmpfs.h>
+#include <scdk/user_grant.h>
 #include <scdk/usermode.h>
 #include <scdk/vfs.h>
 
 #define SCDK_VMM_SELFTEST_VIRT 0xffffffffc0000000ull
 #define SCDK_ASPACE_SELFTEST_VIRT 0x0000000000400000ull
+#define SCDK_USER_GRANT_TEST_PAYLOAD "grant payload"
 
 static const struct limine_memmap_response *selftest_memmap;
 static uint64_t selftest_hhdm_offset;
@@ -866,6 +868,18 @@ static void run_initrd_selftest(void) {
         scdk_panic("initrd /hello has no data");
     }
 
+    status = scdk_initrd_find("/grant-test", &file);
+    require_status("initrd find /grant-test", status, SCDK_OK);
+    if (file.data == 0 || file.size == 0u) {
+        scdk_panic("initrd /grant-test has no data");
+    }
+
+    status = scdk_initrd_find("/ring-test", &file);
+    require_status("initrd find /ring-test", status, SCDK_OK);
+    if (file.data == 0 || file.size == 0u) {
+        scdk_panic("initrd /ring-test has no data");
+    }
+
     scdk_log_write("test", "initrd: pass");
 }
 
@@ -1182,6 +1196,153 @@ static void run_proc_selftest(void) {
     scdk_log_write("test", "proc: pass");
 }
 
+static scdk_status_t grant_test_endpoint_handler(scdk_cap_t endpoint,
+                                                 struct scdk_message *msg,
+                                                 void *context) {
+    char buffer[32];
+    scdk_status_t status;
+
+    (void)context;
+
+    if (msg == 0 || msg->type != SCDK_MSG_READ) {
+        return SCDK_ERR_INVAL;
+    }
+
+    if (msg->arg3 == 1u) {
+        status = scdk_user_grant_copy_from(endpoint,
+                                           (scdk_cap_t)msg->arg0,
+                                           msg->arg1,
+                                           buffer,
+                                           msg->arg2);
+        if (status != SCDK_OK) {
+            return status;
+        }
+
+        if (msg->arg2 != (uint64_t)(sizeof(SCDK_USER_GRANT_TEST_PAYLOAD) - 1u) ||
+            memcmp(buffer, SCDK_USER_GRANT_TEST_PAYLOAD, sizeof(SCDK_USER_GRANT_TEST_PAYLOAD) - 1u) != 0) {
+            return SCDK_ERR_INVAL;
+        }
+        scdk_log_write("grant", "user read grant pass");
+
+        status = scdk_validate_grant_access((scdk_cap_t)msg->arg0,
+                                            0,
+                                            1,
+                                            SCDK_RIGHT_WRITE);
+        if (status == SCDK_OK) {
+            return SCDK_ERR_PERM;
+        }
+        scdk_log_write("grant", "write denied pass");
+
+        status = scdk_validate_grant_access((scdk_cap_t)msg->arg0,
+                                            msg->arg2,
+                                            1,
+                                            SCDK_RIGHT_READ);
+        if (status == SCDK_OK) {
+            return SCDK_ERR_BOUNDS;
+        }
+        scdk_log_write("grant", "bounds reject pass");
+        return SCDK_OK;
+    }
+
+    if (msg->arg3 == 2u) {
+        status = scdk_validate_grant_access((scdk_cap_t)msg->arg0,
+                                            0,
+                                            1,
+                                            SCDK_RIGHT_READ);
+        if (status == SCDK_OK) {
+            return SCDK_ERR_PERM;
+        }
+        scdk_log_write("grant", "revoke pass");
+        return SCDK_OK;
+    }
+
+    return SCDK_ERR_INVAL;
+}
+
+static void run_user_grant_selftest(void) {
+    scdk_cap_t endpoint = 0;
+    scdk_cap_t looked_up = 0;
+    scdk_cap_t task = 0;
+    scdk_cap_t main_thread = 0;
+    uint32_t task_state = SCDK_TASK_NONE;
+    uint32_t thread_state = SCDK_THREAD_NONE;
+    scdk_status_t status;
+
+    scdk_log_write("test", "user grant self-test start");
+
+    status = scdk_endpoint_create(SCDK_BOOT_CORE,
+                                  grant_test_endpoint_handler,
+                                  0,
+                                  &endpoint);
+    require_status("grant test endpoint create", status, SCDK_OK);
+
+    status = scdk_service_register(SCDK_SERVICE_GRANT_TEST, endpoint);
+    require_status("grant test service register", status, SCDK_OK);
+
+    status = scdk_service_lookup(SCDK_SERVICE_GRANT_TEST, &looked_up);
+    require_status("grant test service lookup", status, SCDK_OK);
+    if (looked_up != endpoint) {
+        scdk_panic("grant test service endpoint mismatch");
+    }
+
+    status = scdk_loader_load_from_vfs_with_endpoint("/grant-test",
+                                                     selftest_hhdm_offset,
+                                                     looked_up,
+                                                     &task,
+                                                     &main_thread);
+    require_status("user grant task run", status, SCDK_OK);
+
+    status = scdk_user_task_state(task, &task_state);
+    require_status("user grant task dead state", status, SCDK_OK);
+    if (task_state != SCDK_TASK_DEAD) {
+        scdk_panic("user grant task did not exit");
+    }
+
+    status = scdk_user_thread_state(main_thread, &thread_state);
+    require_status("user grant thread dead state", status, SCDK_OK);
+    if (thread_state != SCDK_THREAD_DEAD) {
+        scdk_panic("user grant thread did not exit");
+    }
+
+    status = scdk_task_cleanup(task);
+    require_status("user grant task cleanup", status, SCDK_OK);
+
+    scdk_log_write("test", "user grant: pass");
+}
+
+static void run_user_ring_selftest(void) {
+    scdk_cap_t task = 0;
+    scdk_cap_t main_thread = 0;
+    uint32_t task_state = SCDK_TASK_NONE;
+    uint32_t thread_state = SCDK_THREAD_NONE;
+    scdk_status_t status;
+
+    scdk_log_write("test", "user ring self-test start");
+
+    status = scdk_loader_load_from_vfs("/ring-test",
+                                       selftest_hhdm_offset,
+                                       &task,
+                                       &main_thread);
+    require_status("user ring task run", status, SCDK_OK);
+
+    status = scdk_user_task_state(task, &task_state);
+    require_status("user ring task dead state", status, SCDK_OK);
+    if (task_state != SCDK_TASK_DEAD) {
+        scdk_panic("user ring task did not exit");
+    }
+
+    status = scdk_user_thread_state(main_thread, &thread_state);
+    require_status("user ring thread dead state", status, SCDK_OK);
+    if (thread_state != SCDK_THREAD_DEAD) {
+        scdk_panic("user ring thread did not exit");
+    }
+
+    status = scdk_task_cleanup(task);
+    require_status("user ring task cleanup", status, SCDK_OK);
+
+    scdk_log_write("test", "user ring: pass");
+}
+
 scdk_status_t scdk_run_core_selftests(void) {
     if (selftest_memmap == 0 || selftest_hhdm_offset == 0u) {
         return SCDK_ERR_INVAL;
@@ -1203,6 +1364,8 @@ scdk_status_t scdk_run_core_selftests(void) {
     run_vfs_selftest();
     run_loader_selftest();
     run_proc_selftest();
+    run_user_grant_selftest();
+    run_user_ring_selftest();
 
     scdk_log_write("test", "all core tests passed");
     return SCDK_OK;

@@ -18,11 +18,11 @@ user-space compatibility layer, but it is not the native kernel API.
 
 ## Version
 
-Current version: `0.3.0-alpha.1`
+Current version: `0.3.0-alpha.2`
 
 ## Current Milestone
 
-This tree currently implements Milestone 0 through Milestone 22:
+This tree currently implements Milestone 0 through Milestone 24:
 
 - Limine bootable ISO
 - higher-half x86_64 freestanding kernel ELF
@@ -87,6 +87,13 @@ This tree currently implements Milestone 0 through Milestone 22:
 - `/hello` console write routed through syscall, endpoint, message, and service
 - kernel-resident process manager service endpoint
 - `/init` spawn request routed through syscall, endpoint, proc service, VFS, and loader
+- user-visible grant create/revoke syscalls
+- user grants bound to source task, target endpoint, range, rights, and lifetime
+- grant-test service validates read access, write denial, bounds rejection, and revoke
+- user-visible ring create/bind/submit/poll syscalls
+- user rings bound to endpoint capabilities and owned by the source task
+- console service consumes ring descriptors and reads payloads through grants
+- ring-test user executable submits and polls a batch of 16 completions
 
 Full filesystem and full user-space support are intentionally not implemented yet.
 
@@ -154,6 +161,8 @@ Expected serial output includes:
 [initrd] found module
 [initrd] file: /init
 [initrd] file: /hello
+[initrd] file: /grant-test
+[initrd] file: /ring-test
 [initrd] file: /etc/scdk.conf
 [initrd] file: /hello.txt
 [initrd] list pass
@@ -178,8 +187,17 @@ Expected serial output includes:
 [user] hello from spawned process
 [proc] process exited
 [loader] /init start pass
+[loader] loading /grant-test
+[grant] user read grant pass
+[grant] write denied pass
+[grant] bounds reject pass
+[grant] revoke pass
+[loader] loading /ring-test
+[ring] user ring create pass
+[ring] submit batch 16
+[ring] completion batch 16 pass
 [test] all core tests passed
-[boot] milestone 22 complete
+[boot] milestone 24 complete
 ```
 
 ## VMware

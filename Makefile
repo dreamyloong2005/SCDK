@@ -21,6 +21,12 @@ USER_INIT_BIN := $(INITRD_BUILD_ROOT)/init
 USER_HELLO_OBJ := $(USER_BUILD_DIR)/hello.o
 USER_HELLO_ELF := $(USER_BUILD_DIR)/hello.elf
 USER_HELLO_BIN := $(INITRD_BUILD_ROOT)/hello
+USER_GRANT_OBJ := $(USER_BUILD_DIR)/grant.o
+USER_GRANT_ELF := $(USER_BUILD_DIR)/grant.elf
+USER_GRANT_BIN := $(INITRD_BUILD_ROOT)/grant-test
+USER_RING_OBJ := $(USER_BUILD_DIR)/ring.o
+USER_RING_ELF := $(USER_BUILD_DIR)/ring.elf
+USER_RING_BIN := $(INITRD_BUILD_ROOT)/ring-test
 LIMINE_DIR := .devtools/limine
 VERSION_FILE := VERSION
 SCDK_VERSION := $(shell sed -n '1p' $(VERSION_FILE))
@@ -73,6 +79,8 @@ ASM_SRCS := $(shell find src -name '*.S' | sort)
 INITRD_FILES := \
 	$(USER_INIT_BIN) \
 	$(USER_HELLO_BIN) \
+	$(USER_GRANT_BIN) \
+	$(USER_RING_BIN) \
 	$(INITRD_BUILD_ROOT)/etc/scdk.conf \
 	$(INITRD_BUILD_ROOT)/hello.txt
 OBJS := \
@@ -116,6 +124,30 @@ $(USER_HELLO_BIN): $(USER_HELLO_ELF)
 	@mkdir -p $(dir $@)
 	$(OBJCOPY) -O binary -j .text $< $@
 
+$(USER_GRANT_OBJ): $(USER_DIR)/grant.S
+	@mkdir -p $(dir $@)
+	$(CC) $(CPPFLAGS) $(USER_CFLAGS) -c $< -o $@
+
+$(USER_GRANT_ELF): $(USER_GRANT_OBJ)
+	@mkdir -p $(dir $@)
+	$(LD) -nostdlib -static -Ttext=$(USER_LOAD_ADDR) -o $@ $<
+
+$(USER_GRANT_BIN): $(USER_GRANT_ELF)
+	@mkdir -p $(dir $@)
+	$(OBJCOPY) -O binary -j .text $< $@
+
+$(USER_RING_OBJ): $(USER_DIR)/ring.S
+	@mkdir -p $(dir $@)
+	$(CC) $(CPPFLAGS) $(USER_CFLAGS) -c $< -o $@
+
+$(USER_RING_ELF): $(USER_RING_OBJ)
+	@mkdir -p $(dir $@)
+	$(LD) -nostdlib -static -Ttext=$(USER_LOAD_ADDR) -o $@ $<
+
+$(USER_RING_BIN): $(USER_RING_ELF)
+	@mkdir -p $(dir $@)
+	$(OBJCOPY) -O binary -j .text $< $@
+
 $(INITRD_BUILD_ROOT)/etc/scdk.conf: $(INITRD_ROOT)/etc/scdk.conf
 	@mkdir -p $(dir $@)
 	cp $< $@
@@ -126,7 +158,7 @@ $(INITRD_BUILD_ROOT)/hello.txt: $(INITRD_ROOT)/hello.txt
 
 $(INITRD): $(INITRD_FILES)
 	@mkdir -p $(dir $@)
-	tar --format=ustar -cf $@ -C $(INITRD_BUILD_ROOT) init hello etc/scdk.conf hello.txt
+	tar --format=ustar -cf $@ -C $(INITRD_BUILD_ROOT) init hello grant-test ring-test etc/scdk.conf hello.txt
 
 $(BUILD_DIR)/%.c.o: src/%.c $(VERSION_FILE)
 	@mkdir -p $(dir $@)

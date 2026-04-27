@@ -67,4 +67,10 @@ scdk_status_t scdk_task_cleanup(scdk_cap_t task);
 scdk_status_t scdk_user_task_state(scdk_cap_t task,
                                    uint32_t *out_state);
 
+/*
+ * Control-plane diagnostic: read the user task currently executing on this CPU
+ * during a prototype ring 3 entry.
+ */
+scdk_status_t scdk_user_task_current(scdk_cap_t *out_task);
+
 #endif

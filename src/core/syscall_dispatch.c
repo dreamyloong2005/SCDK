@@ -7,7 +7,10 @@
 
 #include <scdk/log.h>
 #include <scdk/scheduler.h>
+#include <scdk/task.h>
+#include <scdk/user_grant.h>
 #include <scdk/user_ipc.h>
+#include <scdk/user_ring.h>
 
 uint64_t scdk_syscall_return_value;
 
@@ -79,8 +82,6 @@ uint64_t scdk_syscall_dispatch(uint64_t number,
                                uint64_t user_rsp) {
     scdk_status_t status = SCDK_OK;
 
-    (void)arg2;
-    (void)arg3;
     (void)user_rsp;
 
     if (!scdk_syscall_ready()) {
@@ -105,6 +106,78 @@ uint64_t scdk_syscall_dispatch(uint64_t number,
         user_exited = true;
         scdk_syscall_return_value = (uint64_t)SCDK_OK;
         return 1u;
+    case SCDK_SYS_GRANT_CREATE: {
+        scdk_cap_t task = 0;
+        scdk_cap_t grant = 0;
+
+        status = scdk_user_task_current(&task);
+        if (status == SCDK_OK) {
+            status = scdk_user_grant_create(task,
+                                            (uintptr_t)arg0,
+                                            arg1,
+                                            arg2,
+                                            (scdk_cap_t)arg3,
+                                            &grant);
+        }
+
+        scdk_syscall_return_value = status == SCDK_OK ? grant : (uint64_t)status;
+        return 0u;
+    }
+    case SCDK_SYS_GRANT_REVOKE:
+        status = scdk_user_grant_revoke((scdk_cap_t)arg0);
+        break;
+    case SCDK_SYS_RING_CREATE: {
+        scdk_cap_t task = 0;
+        scdk_cap_t ring = 0;
+
+        status = scdk_user_task_current(&task);
+        if (status == SCDK_OK) {
+            status = scdk_user_ring_create(task, (uint32_t)arg0, &ring);
+        }
+
+        scdk_syscall_return_value = status == SCDK_OK ? ring : (uint64_t)status;
+        return 0u;
+    }
+    case SCDK_SYS_RING_BIND: {
+        scdk_cap_t task = 0;
+
+        status = scdk_user_task_current(&task);
+        if (status == SCDK_OK) {
+            status = scdk_user_ring_bind(task, (scdk_cap_t)arg0, (scdk_cap_t)arg1);
+        }
+        break;
+    }
+    case SCDK_SYS_RING_SUBMIT: {
+        scdk_cap_t task = 0;
+
+        status = scdk_user_task_current(&task);
+        if (status == SCDK_OK) {
+            status = scdk_user_ring_submit(task,
+                                           (scdk_cap_t)arg0,
+                                           (uintptr_t)arg1,
+                                           (uint32_t)arg2);
+        }
+        if (status == SCDK_OK) {
+            endpoint_call_passed = true;
+        }
+        break;
+    }
+    case SCDK_SYS_RING_POLL: {
+        scdk_cap_t task = 0;
+        uint32_t completed = 0;
+
+        status = scdk_user_task_current(&task);
+        if (status == SCDK_OK) {
+            status = scdk_user_ring_poll(task,
+                                         (scdk_cap_t)arg0,
+                                         (uintptr_t)arg1,
+                                         (uint32_t)arg2,
+                                         &completed);
+        }
+
+        scdk_syscall_return_value = status == SCDK_OK ? completed : (uint64_t)status;
+        return 0u;
+    }
     default:
         scdk_log_error("unsupported syscall %llu",
                        (unsigned long long)number);
