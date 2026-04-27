@@ -19,6 +19,8 @@
 #include <scdk/ring.h>
 #include <scdk/scheduler.h>
 #include <scdk/service.h>
+#include <scdk/task.h>
+#include <scdk/thread.h>
 #include <scdk/usermode.h>
 
 #define SCDK_VMM_SELFTEST_VIRT 0xffffffffc0000000ull
@@ -766,6 +768,62 @@ static void run_usermode_selftest(void) {
     scdk_log_write("boot", "user-mode initialized");
 }
 
+static void run_user_task_lifecycle_selftest(void) {
+    scdk_cap_t task = 0;
+    scdk_cap_t aspace = 0;
+    scdk_cap_t main_thread = 0;
+    uint32_t task_state = SCDK_TASK_NONE;
+    uint32_t thread_state = SCDK_THREAD_NONE;
+    scdk_status_t status;
+
+    scdk_log_write("test", "user task lifecycle self-test start");
+
+    status = scdk_user_task_create(&task, &aspace, &main_thread);
+    require_status("user task create", status, SCDK_OK);
+
+    if (task == 0 || aspace == 0 || main_thread == 0) {
+        scdk_panic("user task lifecycle returned empty cap");
+    }
+
+    status = scdk_user_task_state(task, &task_state);
+    require_status("user task new state", status, SCDK_OK);
+    if (task_state != SCDK_TASK_NEW) {
+        scdk_panic("user task not NEW");
+    }
+
+    status = scdk_user_thread_state(main_thread, &thread_state);
+    require_status("user main thread new state", status, SCDK_OK);
+    if (thread_state != SCDK_THREAD_NEW) {
+        scdk_panic("user main thread not NEW");
+    }
+
+    status = scdk_user_task_run_builtin(task, selftest_hhdm_offset);
+    require_status("user task run built-in stub", status, SCDK_OK);
+
+    status = scdk_user_task_state(task, &task_state);
+    require_status("user task dead state", status, SCDK_OK);
+    if (task_state != SCDK_TASK_DEAD) {
+        scdk_panic("user task not DEAD");
+    }
+
+    status = scdk_user_thread_state(main_thread, &thread_state);
+    require_status("user main thread dead state", status, SCDK_OK);
+    if (thread_state != SCDK_THREAD_DEAD) {
+        scdk_panic("user main thread not DEAD");
+    }
+
+    status = scdk_task_cleanup(task);
+    require_status("user task cleanup", status, SCDK_OK);
+
+    status = scdk_user_task_state(task, &task_state);
+    require_status("user task cleaned state", status, SCDK_OK);
+    if (task_state != SCDK_TASK_CLEANED) {
+        scdk_panic("user task not CLEANED");
+    }
+
+    scdk_log_write("test", "user task lifecycle: pass");
+}
+
 scdk_status_t scdk_run_core_selftests(void) {
     if (selftest_memmap == 0 || selftest_hhdm_offset == 0u) {
         return SCDK_ERR_INVAL;
@@ -781,6 +839,7 @@ scdk_status_t scdk_run_core_selftests(void) {
     run_address_space_selftest();
     run_scheduler_selftest();
     run_usermode_selftest();
+    run_user_task_lifecycle_selftest();
 
     scdk_log_write("test", "all core tests passed");
     return SCDK_OK;

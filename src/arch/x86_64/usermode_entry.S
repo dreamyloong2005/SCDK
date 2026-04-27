@@ -15,6 +15,7 @@ scdk_enter_usermode_asm:
     pushq %rbx
     pushq %rbp
 
+    movq %rdi, %r8
     movq %rsp, scdk_user_return_rsp(%rip)
     leaq .Luser_return(%rip), %rax
     movq %rax, scdk_user_return_rip(%rip)
@@ -27,7 +28,8 @@ scdk_enter_usermode_asm:
     pushq %rsi
     pushq $0x2
     pushq $X86_USER_CODE_SEL
-    pushq %rdi
+    pushq %r8
+    movq %rdx, %rdi
     iretq
 
 .Luser_return:
@@ -46,17 +48,24 @@ scdk_syscall_entry:
     movq %rsp, scdk_syscall_user_rsp(%rip)
     movq %rcx, scdk_syscall_user_rip(%rip)
     movq %r11, scdk_syscall_user_rflags(%rip)
+    movq %rdi, scdk_syscall_arg0(%rip)
+    movq %rsi, scdk_syscall_arg1(%rip)
+    movq %rdx, scdk_syscall_arg2(%rip)
+    movq %r10, scdk_syscall_arg3(%rip)
 
     movq scdk_syscall_kernel_stack_top(%rip), %rsp
     movq %rax, %rdi
-    movq scdk_syscall_user_rsp(%rip), %rsi
-    movq scdk_syscall_user_rip(%rip), %rdx
-    movq scdk_syscall_user_rflags(%rip), %rcx
+    movq scdk_syscall_arg0(%rip), %rsi
+    movq scdk_syscall_arg1(%rip), %rdx
+    movq scdk_syscall_arg2(%rip), %rcx
+    movq scdk_syscall_arg3(%rip), %r8
+    movq scdk_syscall_user_rsp(%rip), %r9
     call scdk_syscall_dispatch
 
     cmpq $1, %rax
     je .Lsyscall_exit
 
+    movq scdk_syscall_return_value(%rip), %rax
     movq scdk_syscall_user_rip(%rip), %rcx
     movq scdk_syscall_user_rflags(%rip), %r11
     movq scdk_syscall_user_rsp(%rip), %rsp
@@ -71,13 +80,36 @@ scdk_syscall_entry:
 .global scdk_user_test_stub_end
 .type scdk_user_test_stub_start, @function
 scdk_user_test_stub_start:
+    movq %rdi, %rbx
+
     movq $0, %rax
     syscall
+
+    subq $64, %rsp
+    movq %rsp, %rsi
+
+    movq $0, 0(%rsi)
+    movq $1, 8(%rsi)
+    movq $4, 16(%rsi)
+    leaq .Luser_console_write(%rip), %rax
+    movq %rax, 24(%rsi)
+    movq $(.Luser_console_write_end - .Luser_console_write), 32(%rsi)
+    movq $0, 40(%rsi)
+    movq $0, 48(%rsi)
+    movq $0, 56(%rsi)
+
     movq $1, %rax
+    movq %rbx, %rdi
+    syscall
+
+    movq $3, %rax
     syscall
 .Luser_halt:
     hlt
     jmp .Luser_halt
+.Luser_console_write:
+    .ascii "[user] endpoint call console write pass"
+.Luser_console_write_end:
 scdk_user_test_stub_end:
 .size scdk_user_test_stub_start, . - scdk_user_test_stub_start
 

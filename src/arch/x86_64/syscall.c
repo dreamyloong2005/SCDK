@@ -26,11 +26,14 @@ uint64_t scdk_syscall_kernel_stack_top;
 uint64_t scdk_syscall_user_rsp;
 uint64_t scdk_syscall_user_rip;
 uint64_t scdk_syscall_user_rflags;
+uint64_t scdk_syscall_arg0;
+uint64_t scdk_syscall_arg1;
+uint64_t scdk_syscall_arg2;
+uint64_t scdk_syscall_arg3;
 uint64_t scdk_user_return_rsp;
 uint64_t scdk_user_return_rip;
 
 static bool syscall_initialized;
-static bool user_exited;
 
 static uint64_t rdmsr(uint32_t msr) {
     uint32_t lo;
@@ -56,7 +59,7 @@ scdk_status_t scdk_syscall_init(uint64_t kernel_stack_top) {
     }
 
     scdk_syscall_kernel_stack_top = kernel_stack_top;
-    user_exited = false;
+    scdk_syscall_reset_task_state();
 
     star = (X86_SYSRET_USER_BASE_SEL << 48u) | (X86_KERNEL_CODE_SEL << 32u);
     wrmsr(MSR_STAR, star);
@@ -71,33 +74,6 @@ scdk_status_t scdk_syscall_init(uint64_t kernel_stack_top) {
     return SCDK_OK;
 }
 
-uint64_t scdk_syscall_dispatch(uint64_t number,
-                               uint64_t user_rsp,
-                               uint64_t user_rip,
-                               uint64_t user_rflags) {
-    (void)user_rsp;
-    (void)user_rip;
-    (void)user_rflags;
-
-    if (!syscall_initialized) {
-        return 1u;
-    }
-
-    switch (number) {
-    case SCDK_SYS_DEBUG_WRITE:
-        scdk_log_write("syscall", "debug call from user mode");
-        return 0u;
-    case SCDK_SYS_EXIT:
-        user_exited = true;
-        return 1u;
-    default:
-        scdk_log_error("unsupported syscall %llu",
-                       (unsigned long long)number);
-        user_exited = true;
-        return 1u;
-    }
-}
-
-bool scdk_syscall_user_exited(void) {
-    return user_exited;
+bool scdk_syscall_ready(void) {
+    return syscall_initialized;
 }

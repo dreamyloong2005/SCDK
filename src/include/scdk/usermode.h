@@ -6,6 +6,7 @@
 
 #include <stdint.h>
 
+#include <scdk/capability.h>
 #include <scdk/types.h>
 
 #define SCDK_USER_TEST_CODE_VIRT 0x0000000000400000ull
@@ -22,5 +23,13 @@ scdk_status_t scdk_usermode_init(uint64_t syscall_stack_top);
  * execute a debug syscall, and return through the exit syscall.
  */
 scdk_status_t scdk_usermode_run_builtin_test(uint64_t hhdm_offset);
+
+/*
+ * Control-plane test path: run the built-in user stub in an existing user task
+ * address space and thread object.
+ */
+scdk_status_t scdk_usermode_run_task_test(scdk_cap_t aspace,
+                                          scdk_cap_t thread,
+                                          uint64_t hhdm_offset);
 
 #endif

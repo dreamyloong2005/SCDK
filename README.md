@@ -18,11 +18,11 @@ user-space compatibility layer, but it is not the native kernel API.
 
 ## Version
 
-Current version: `0.2.0-alpha.1`
+Current version: `0.2.0-alpha.2`
 
 ## Current Milestone
 
-This tree currently implements Milestone 0 through Milestone 15:
+This tree currently implements Milestone 0 through Milestone 17:
 
 - Limine bootable ISO
 - higher-half x86_64 freestanding kernel ELF
@@ -69,6 +69,11 @@ This tree currently implements Milestone 0 through Milestone 15:
 - x86_64 context switch path for kernel threads
 - built-in ring 3 user-mode entry prototype
 - minimal debug and exit syscall path
+- minimal syscall dispatch for debug-write, endpoint-call, yield, and exit
+- user-to-kernel endpoint call path with user message validation
+- user-mode console write routed through syscall, endpoint, message, and service
+- minimal user task lifecycle with address-space and main-thread objects
+- user task run, exit, and cleanup self-tests
 
 Filesystem and user-space support are intentionally not implemented yet.
 
@@ -127,9 +132,14 @@ Expected serial output includes:
 [user] preparing test address space
 [user] entering ring3
 [syscall] debug call from user mode
+[user] endpoint call console write pass
 [user] returned or exited
+[task] user task created
+[task] main thread started
+[task] user task exited
+[task] cleanup pass
 [test] all core tests passed
-[boot] milestone 15 complete
+[boot] milestone 17 complete
 ```
 
 ## VMware

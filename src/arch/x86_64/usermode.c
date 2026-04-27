@@ -8,8 +8,11 @@
 #include <stdint.h>
 
 #include <scdk/address_space.h>
+#include <scdk/capability.h>
 #include <scdk/log.h>
 #include <scdk/mm.h>
+#include <scdk/object.h>
+#include <scdk/service.h>
 #include <scdk/string.h>
 #include <scdk/syscall.h>
 
@@ -46,7 +49,9 @@ struct x86_tss {
     uint16_t iopb_offset;
 } __attribute__((packed));
 
-extern void scdk_enter_usermode_asm(uint64_t entry, uint64_t stack_top);
+extern void scdk_enter_usermode_asm(uint64_t entry,
+                                    uint64_t stack_top,
+                                    scdk_cap_t bootstrap_endpoint);
 extern const uint8_t scdk_user_test_stub_start[];
 extern const uint8_t scdk_user_test_stub_end[];
 
@@ -132,18 +137,19 @@ scdk_status_t scdk_usermode_init(uint64_t syscall_stack_top) {
     return SCDK_OK;
 }
 
-scdk_status_t scdk_usermode_run_builtin_test(uint64_t hhdm_offset) {
-    scdk_cap_t aspace = 0;
+static scdk_status_t run_stub_in_aspace(scdk_cap_t aspace,
+                                        uint64_t hhdm_offset) {
     uint64_t boot_root = 0;
     uint64_t code_phys = 0;
     uint64_t stack_phys = 0;
+    scdk_cap_t console_endpoint = 0;
     uintptr_t code_page;
     uintptr_t stack_page;
     size_t stub_size;
     uint64_t syscall_stack_top;
     scdk_status_t status;
 
-    if (hhdm_offset == 0u) {
+    if (aspace == 0 || hhdm_offset == 0u) {
         return SCDK_ERR_INVAL;
     }
 
@@ -160,7 +166,7 @@ scdk_status_t scdk_usermode_run_builtin_test(uint64_t hhdm_offset) {
         return status;
     }
 
-    status = scdk_address_space_create(&aspace);
+    status = scdk_service_lookup(SCDK_SERVICE_CONSOLE, &console_endpoint);
     if (status != SCDK_OK) {
         return status;
     }
@@ -216,14 +222,18 @@ scdk_status_t scdk_usermode_run_builtin_test(uint64_t hhdm_offset) {
     }
 
     scdk_log_write("user", "entering ring3");
-    scdk_enter_usermode_asm(SCDK_USER_TEST_CODE_VIRT, SCDK_USER_TEST_STACK_TOP);
+    scdk_enter_usermode_asm(SCDK_USER_TEST_CODE_VIRT,
+                            SCDK_USER_TEST_STACK_TOP,
+                            console_endpoint);
 
     status = scdk_vmm_activate_root(boot_root);
     if (status != SCDK_OK) {
         return status;
     }
 
-    if (!usermode_initialized || !scdk_syscall_user_exited()) {
+    if (!usermode_initialized ||
+        !scdk_syscall_user_exited() ||
+        !scdk_syscall_endpoint_call_passed()) {
         return SCDK_ERR_BUSY;
     }
 
@@ -235,4 +245,33 @@ scdk_status_t scdk_usermode_run_builtin_test(uint64_t hhdm_offset) {
     (void)scdk_page_free(code_phys);
 
     return SCDK_OK;
+}
+
+scdk_status_t scdk_usermode_run_task_test(scdk_cap_t aspace,
+                                          scdk_cap_t thread,
+                                          uint64_t hhdm_offset) {
+    scdk_status_t status;
+
+    status = scdk_cap_check(thread, SCDK_RIGHT_READ, SCDK_OBJ_THREAD, 0);
+    if (status != SCDK_OK) {
+        return status;
+    }
+
+    return run_stub_in_aspace(aspace, hhdm_offset);
+}
+
+scdk_status_t scdk_usermode_run_builtin_test(uint64_t hhdm_offset) {
+    scdk_cap_t aspace = 0;
+    scdk_status_t status;
+
+    if (hhdm_offset == 0u) {
+        return SCDK_ERR_INVAL;
+    }
+
+    status = scdk_address_space_create(&aspace);
+    if (status != SCDK_OK) {
+        return status;
+    }
+
+    return run_stub_in_aspace(aspace, hhdm_offset);
 }
