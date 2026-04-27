@@ -18,11 +18,11 @@ user-space compatibility layer, but it is not the native kernel API.
 
 ## Version
 
-Current version: `0.1.0-alpha.2`
+Current version: `0.2.0-alpha.1`
 
 ## Current Milestone
 
-This tree currently implements Milestone 0 through Milestone 10:
+This tree currently implements Milestone 0 through Milestone 15:
 
 - Limine bootable ISO
 - higher-half x86_64 freestanding kernel ELF
@@ -59,6 +59,16 @@ This tree currently implements Milestone 0 through Milestone 10:
 - thread object skeleton
 - current task/thread scheduler placeholder
 - cooperative yield stub self-test
+- unified core regression self-test runner
+- interface status definitions split into a dedicated status header
+- page-backed kernel heap
+- kernel allocation, zeroed allocation, free-list reuse, and typed object storage tests
+- capability-protected address-space objects
+- address-space user mapping, activation, range rejection, and unmap tests
+- cooperative kernel-thread scheduler with per-core run queue
+- x86_64 context switch path for kernel threads
+- built-in ring 3 user-mode entry prototype
+- minimal debug and exit syscall path
 
 Filesystem and user-space support are intentionally not implemented yet.
 
@@ -102,8 +112,24 @@ Expected serial output includes:
 [boot] grant core initialized
 [boot] pmm initialized
 [boot] vmm initialized
+[heap] init ok
+[heap] alloc/free smoke test pass
+[heap] typed allocation smoke test pass
+[aspace] create pass
+[aspace] user map pass
+[aspace] kernel range reject pass
+[aspace] unmap pass
+[sched] thread A step 1
+[sched] thread B step 1
+[sched] thread A step 2
+[sched] thread B step 2
 [boot] scheduler initialized
-[boot] milestone 10 complete
+[user] preparing test address space
+[user] entering ring3
+[syscall] debug call from user mode
+[user] returned or exited
+[test] all core tests passed
+[boot] milestone 15 complete
 ```
 
 ## VMware

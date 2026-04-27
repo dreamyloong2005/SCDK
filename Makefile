@@ -37,10 +37,14 @@ LDFLAGS := \
 	-nostdlib \
 	-static \
 	-Wl,-z,max-page-size=0x1000 \
+	-Wl,-z,noexecstack \
 	-Wl,--build-id=none
 
 C_SRCS := $(shell find src -name '*.c' | sort)
-OBJS := $(patsubst src/%.c,$(BUILD_DIR)/%.c.o,$(C_SRCS))
+ASM_SRCS := $(shell find src -name '*.S' | sort)
+OBJS := \
+	$(patsubst src/%.c,$(BUILD_DIR)/%.c.o,$(C_SRCS)) \
+	$(patsubst src/%.S,$(BUILD_DIR)/%.S.o,$(ASM_SRCS))
 DEPS := $(OBJS:.o=.d)
 
 .PHONY: all clean iso run
@@ -56,6 +60,10 @@ $(KERNEL): $(OBJS) linker.ld
 	$(CC) $(CFLAGS) $(LDFLAGS) $(OBJS) -o $@ -lgcc
 
 $(BUILD_DIR)/%.c.o: src/%.c $(VERSION_FILE)
+	@mkdir -p $(dir $@)
+	$(CC) $(CPPFLAGS) $(CFLAGS) -MMD -MP -c $< -o $@
+
+$(BUILD_DIR)/%.S.o: src/%.S $(VERSION_FILE)
 	@mkdir -p $(dir $@)
 	$(CC) $(CPPFLAGS) $(CFLAGS) -MMD -MP -c $< -o $@
 

@@ -7,16 +7,7 @@
 #include <stddef.h>
 #include <stdint.h>
 
-typedef int64_t scdk_status_t;
-
-#define SCDK_OK             0
-#define SCDK_ERR_INVAL     -1
-#define SCDK_ERR_NOMEM     -2
-#define SCDK_ERR_NOENT     -3
-#define SCDK_ERR_PERM      -4
-#define SCDK_ERR_BOUNDS    -5
-#define SCDK_ERR_BUSY      -6
-#define SCDK_ERR_NOTSUP    -7
+#include <scdk/status.h>
 
 #define SCDK_BOOT_CORE 0u
 #define SCDK_MAX_CORES 1u

@@ -25,6 +25,10 @@ static inline uint64_t read_cr3(void) {
     return value;
 }
 
+static inline void write_cr3(uint64_t value) {
+    __asm__ volatile ("mov %0, %%cr3" : : "r"(value) : "memory");
+}
+
 static inline void invlpg(uint64_t virt) {
     __asm__ volatile ("invlpg (%0)" : : "r"(virt) : "memory");
 }
@@ -70,6 +74,18 @@ static scdk_status_t validate_vmm_address(uint64_t virt) {
     return SCDK_OK;
 }
 
+static scdk_status_t validate_root(uint64_t root_phys) {
+    if (!vmm_initialized) {
+        return SCDK_ERR_NOTSUP;
+    }
+
+    if (root_phys == 0u || !is_page_aligned(root_phys)) {
+        return SCDK_ERR_INVAL;
+    }
+
+    return SCDK_OK;
+}
+
 static scdk_status_t allocate_table(uint64_t *out_phys) {
     uint64_t phys = 0;
     scdk_status_t status = scdk_page_alloc(&phys);
@@ -86,6 +102,7 @@ static scdk_status_t allocate_table(uint64_t *out_phys) {
 static scdk_status_t next_table(uint64_t *table,
                                 uint64_t index,
                                 bool create,
+                                uint64_t table_flags,
                                 uint64_t **out_next) {
     uint64_t entry = table[index];
 
@@ -100,7 +117,7 @@ static scdk_status_t next_table(uint64_t *table,
             return status;
         }
 
-        entry = new_table_phys | X86_PTE_PRESENT | X86_PTE_WRITABLE;
+        entry = new_table_phys | X86_PTE_PRESENT | X86_PTE_WRITABLE | table_flags;
         table[index] = entry;
     }
 
@@ -112,26 +129,28 @@ static scdk_status_t next_table(uint64_t *table,
     return SCDK_OK;
 }
 
-static scdk_status_t leaf_table_for(uint64_t virt,
-                                    bool create,
-                                    uint64_t **out_pt) {
-    uint64_t *pml4 = phys_to_hhdm(active_cr3_phys);
+static scdk_status_t leaf_table_for_root(uint64_t root_phys,
+                                         uint64_t virt,
+                                         bool create,
+                                         uint64_t table_flags,
+                                         uint64_t **out_pt) {
+    uint64_t *pml4 = phys_to_hhdm(root_phys);
     uint64_t *pdpt = 0;
     uint64_t *pd = 0;
     uint64_t *pt = 0;
     scdk_status_t status;
 
-    status = next_table(pml4, pml4_index(virt), create, &pdpt);
+    status = next_table(pml4, pml4_index(virt), create, table_flags, &pdpt);
     if (status != SCDK_OK) {
         return status;
     }
 
-    status = next_table(pdpt, pdpt_index(virt), create, &pd);
+    status = next_table(pdpt, pdpt_index(virt), create, table_flags, &pd);
     if (status != SCDK_OK) {
         return status;
     }
 
-    status = next_table(pd, pd_index(virt), create, &pt);
+    status = next_table(pd, pd_index(virt), create, table_flags, &pt);
     if (status != SCDK_OK) {
         return status;
     }
@@ -170,12 +189,62 @@ scdk_status_t scdk_vmm_current_root(uint64_t *out_cr3_phys) {
     return SCDK_OK;
 }
 
-scdk_status_t scdk_vmm_map_page(uint64_t virt,
-                                uint64_t phys,
-                                uint64_t flags) {
+scdk_status_t scdk_vmm_create_root(uint64_t *out_root_phys) {
+    uint64_t root_phys = 0;
+    uint64_t *new_root;
+    uint64_t *current_root;
+    scdk_status_t status;
+
+    if (out_root_phys == 0) {
+        return SCDK_ERR_INVAL;
+    }
+
+    if (!vmm_initialized) {
+        return SCDK_ERR_NOTSUP;
+    }
+
+    status = scdk_page_alloc(&root_phys);
+    if (status != SCDK_OK) {
+        return status;
+    }
+
+    new_root = phys_to_hhdm(root_phys);
+    current_root = phys_to_hhdm(active_cr3_phys);
+    memset(new_root, 0, SCDK_PAGE_SIZE);
+
+    for (uint32_t i = 256u; i < 512u; i++) {
+        new_root[i] = current_root[i];
+    }
+
+    *out_root_phys = root_phys;
+    return SCDK_OK;
+}
+
+scdk_status_t scdk_vmm_activate_root(uint64_t root_phys) {
+    scdk_status_t status = validate_root(root_phys);
+
+    if (status != SCDK_OK) {
+        return status;
+    }
+
+    write_cr3(root_phys);
+    active_cr3_phys = root_phys;
+    return SCDK_OK;
+}
+
+scdk_status_t scdk_vmm_map_page_in_root(uint64_t root_phys,
+                                        uint64_t virt,
+                                        uint64_t phys,
+                                        uint64_t flags) {
     uint64_t *pt = 0;
     uint64_t pte_flags = X86_PTE_PRESENT;
+    uint64_t table_flags = 0;
     scdk_status_t status;
+
+    status = validate_root(root_phys);
+    if (status != SCDK_OK) {
+        return status;
+    }
 
     status = validate_vmm_address(virt);
     if (status != SCDK_OK) {
@@ -186,7 +255,11 @@ scdk_status_t scdk_vmm_map_page(uint64_t virt,
         return SCDK_ERR_INVAL;
     }
 
-    status = leaf_table_for(virt, true, &pt);
+    if ((flags & SCDK_VMM_MAP_USER) != 0u) {
+        table_flags |= X86_PTE_USER;
+    }
+
+    status = leaf_table_for_root(root_phys, virt, true, table_flags, &pt);
     if (status != SCDK_OK) {
         return status;
     }
@@ -205,19 +278,34 @@ scdk_status_t scdk_vmm_map_page(uint64_t virt,
     }
 
     pt[index] = (phys & X86_PTE_ADDR) | pte_flags;
-    invlpg(virt);
+    if (root_phys == active_cr3_phys) {
+        invlpg(virt);
+    }
     return SCDK_OK;
 }
 
-scdk_status_t scdk_vmm_unmap_page(uint64_t virt) {
+scdk_status_t scdk_vmm_map_page(uint64_t virt,
+                                uint64_t phys,
+                                uint64_t flags) {
+    return scdk_vmm_map_page_in_root(active_cr3_phys, virt, phys, flags);
+}
+
+scdk_status_t scdk_vmm_unmap_page_in_root(uint64_t root_phys,
+                                          uint64_t virt) {
     uint64_t *pt = 0;
-    scdk_status_t status = validate_vmm_address(virt);
+    scdk_status_t status = validate_root(root_phys);
 
     if (status != SCDK_OK) {
         return status;
     }
 
-    status = leaf_table_for(virt, false, &pt);
+    status = validate_vmm_address(virt);
+
+    if (status != SCDK_OK) {
+        return status;
+    }
+
+    status = leaf_table_for_root(root_phys, virt, false, 0, &pt);
     if (status != SCDK_OK) {
         return status;
     }
@@ -228,15 +316,28 @@ scdk_status_t scdk_vmm_unmap_page(uint64_t virt) {
     }
 
     pt[index] = 0;
-    invlpg(virt);
+    if (root_phys == active_cr3_phys) {
+        invlpg(virt);
+    }
     return SCDK_OK;
 }
 
-scdk_status_t scdk_vmm_virt_to_phys(uint64_t virt,
-                                    uint64_t *out_phys,
-                                    uint64_t *out_flags) {
+scdk_status_t scdk_vmm_unmap_page(uint64_t virt) {
+    return scdk_vmm_unmap_page_in_root(active_cr3_phys, virt);
+}
+
+scdk_status_t scdk_vmm_virt_to_phys_in_root(uint64_t root_phys,
+                                            uint64_t virt,
+                                            uint64_t *out_phys,
+                                            uint64_t *out_flags) {
     uint64_t *pt = 0;
-    scdk_status_t status = validate_vmm_address(virt & ~(SCDK_PAGE_SIZE - 1u));
+    scdk_status_t status = validate_root(root_phys);
+
+    if (status != SCDK_OK) {
+        return status;
+    }
+
+    status = validate_vmm_address(virt & ~(SCDK_PAGE_SIZE - 1u));
 
     if (status != SCDK_OK) {
         return status;
@@ -246,7 +347,7 @@ scdk_status_t scdk_vmm_virt_to_phys(uint64_t virt,
         return SCDK_ERR_INVAL;
     }
 
-    status = leaf_table_for(virt, false, &pt);
+    status = leaf_table_for_root(root_phys, virt, false, 0, &pt);
     if (status != SCDK_OK) {
         return status;
     }
@@ -269,6 +370,15 @@ scdk_status_t scdk_vmm_virt_to_phys(uint64_t virt,
     }
 
     return SCDK_OK;
+}
+
+scdk_status_t scdk_vmm_virt_to_phys(uint64_t virt,
+                                    uint64_t *out_phys,
+                                    uint64_t *out_flags) {
+    return scdk_vmm_virt_to_phys_in_root(active_cr3_phys,
+                                         virt,
+                                         out_phys,
+                                         out_flags);
 }
 
 void scdk_vmm_page_fault_placeholder(uint64_t fault_addr,

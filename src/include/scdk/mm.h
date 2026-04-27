@@ -75,6 +75,19 @@ scdk_status_t scdk_vmm_init(uint64_t hhdm_offset);
 scdk_status_t scdk_vmm_current_root(uint64_t *out_cr3_phys);
 
 /*
+ * Control-plane: create a new x86_64 root page table.
+ * The new root starts with an empty user half and copies the current kernel
+ * half so kernel code, HHDM, and bootstrap mappings remain reachable.
+ */
+scdk_status_t scdk_vmm_create_root(uint64_t *out_root_phys);
+
+/*
+ * Control-plane: switch the active x86_64 root page table.
+ * Intended for address-space activation and boot diagnostics.
+ */
+scdk_status_t scdk_vmm_activate_root(uint64_t root_phys);
+
+/*
  * Control-plane: map one 4 KiB physical page at a virtual address in the
  * active address space. Missing page-table pages are allocated from PMM.
  */
@@ -83,9 +96,24 @@ scdk_status_t scdk_vmm_map_page(uint64_t virt,
                                 uint64_t flags);
 
 /*
+ * Control-plane: map one 4 KiB physical page in a specific root page table.
+ * Missing page-table pages are allocated from PMM.
+ */
+scdk_status_t scdk_vmm_map_page_in_root(uint64_t root_phys,
+                                        uint64_t virt,
+                                        uint64_t phys,
+                                        uint64_t flags);
+
+/*
  * Control-plane: remove one 4 KiB mapping from the active address space.
  */
 scdk_status_t scdk_vmm_unmap_page(uint64_t virt);
+
+/*
+ * Control-plane: remove one 4 KiB mapping from a specific root page table.
+ */
+scdk_status_t scdk_vmm_unmap_page_in_root(uint64_t root_phys,
+                                          uint64_t virt);
 
 /*
  * Control-plane diagnostic: translate a mapped virtual page through the
@@ -94,6 +122,15 @@ scdk_status_t scdk_vmm_unmap_page(uint64_t virt);
 scdk_status_t scdk_vmm_virt_to_phys(uint64_t virt,
                                     uint64_t *out_phys,
                                     uint64_t *out_flags);
+
+/*
+ * Control-plane diagnostic: translate a virtual address through a specific
+ * root page table.
+ */
+scdk_status_t scdk_vmm_virt_to_phys_in_root(uint64_t root_phys,
+                                            uint64_t virt,
+                                            uint64_t *out_phys,
+                                            uint64_t *out_flags);
 
 /*
  * Fault-path placeholder: log a future page-fault event shape.

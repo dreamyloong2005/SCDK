@@ -12,13 +12,18 @@
 
 #define SCDK_MAX_TASKS 64u
 #define SCDK_MAX_THREADS 128u
+#define SCDK_KERNEL_STACK_SIZE 16384u
+
+typedef void (*scdk_thread_entry_t)(void *arg);
 
 enum scdk_thread_state {
     SCDK_THREAD_NONE = 0,
+    SCDK_THREAD_NEW,
     SCDK_THREAD_READY,
     SCDK_THREAD_RUNNING,
     SCDK_THREAD_BLOCKED,
-    SCDK_THREAD_HALTED,
+    SCDK_THREAD_DEAD,
+    SCDK_THREAD_HALTED = SCDK_THREAD_DEAD,
 };
 
 /*
@@ -38,13 +43,31 @@ scdk_status_t scdk_task_create(uint32_t owner_core,
                                scdk_cap_t *out_task);
 
 /*
- * Control-plane: create a thread object skeleton inside a task.
+ * Control-plane: create a kernel thread object inside a task.
  * Requires SCDK_RIGHT_BIND on an SCDK_OBJ_TASK capability.
  */
 scdk_status_t scdk_thread_create(scdk_cap_t task,
-                                 uint64_t entry,
-                                 uint64_t stack_top,
+                                 scdk_thread_entry_t entry,
+                                 void *arg,
                                  scdk_cap_t *out_thread);
+
+/*
+ * Control-plane: make a NEW kernel thread READY and enqueue it.
+ * Requires SCDK_RIGHT_EXEC on an SCDK_OBJ_THREAD capability.
+ */
+scdk_status_t scdk_thread_start(scdk_cap_t thread);
+
+/*
+ * Scheduler data-plane: cooperatively yield the current CPU to another READY
+ * thread on the same owner core.
+ */
+void scdk_yield(void);
+
+/*
+ * Scheduler control-plane test runner: drive READY threads until the run queue
+ * is empty. No timer interrupt or preemption is involved.
+ */
+void scdk_scheduler_run(void);
 
 /*
  * Control-plane diagnostic: read the current task capability.
@@ -75,8 +98,8 @@ scdk_status_t scdk_thread_state(scdk_cap_t thread,
                                 uint32_t *out_state);
 
 /*
- * Scheduler placeholder: cooperative yield stub.
- * No real context switch or preemption is performed yet.
+ * Compatibility wrapper for early boot self-tests.
+ * Performs one cooperative yield when the scheduler is initialized.
  */
 scdk_status_t scdk_scheduler_yield_stub(void);
 
