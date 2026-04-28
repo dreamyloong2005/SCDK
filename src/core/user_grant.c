@@ -147,18 +147,22 @@ scdk_status_t scdk_user_grant_create(scdk_cap_t source_task,
     }
 
     for (uint32_t i = 0; i < SCDK_MAX_USER_GRANTS; i++) {
-        if (user_grants[i].object_id != 0) {
+        bool reuse = user_grants[i].object_id != 0 && user_grants[i].revoked;
+        scdk_object_id_t object_id = user_grants[i].object_id;
+
+        if (user_grants[i].object_id != 0 && !user_grants[i].revoked) {
             continue;
         }
 
-        scdk_object_id_t object_id = 0;
-        status = scdk_object_create(SCDK_OBJ_GRANT,
-                                    SCDK_BOOT_CORE,
-                                    0,
-                                    &user_grants[i],
-                                    &object_id);
-        if (status != SCDK_OK) {
-            return status;
+        if (!reuse) {
+            status = scdk_object_create(SCDK_OBJ_GRANT,
+                                        SCDK_BOOT_CORE,
+                                        0,
+                                        &user_grants[i],
+                                        &object_id);
+            if (status != SCDK_OK) {
+                return status;
+            }
         }
 
         user_grants[i].object_id = object_id;
@@ -172,7 +176,13 @@ scdk_status_t scdk_user_grant_create(scdk_cap_t source_task,
 
         status = scdk_cap_create(object_id, rights | SCDK_RIGHT_REVOKE, out_grant);
         if (status != SCDK_OK) {
-            memset(&user_grants[i], 0, sizeof(user_grants[i]));
+            if (reuse) {
+                memset(&user_grants[i], 0, sizeof(user_grants[i]));
+                user_grants[i].object_id = object_id;
+                user_grants[i].revoked = true;
+            } else {
+                memset(&user_grants[i], 0, sizeof(user_grants[i]));
+            }
             return status;
         }
 
@@ -192,7 +202,7 @@ scdk_status_t scdk_user_grant_revoke(scdk_cap_t grant_cap) {
     }
 
     slot->revoked = true;
-    return SCDK_OK;
+    return scdk_cap_revoke(grant_cap);
 }
 
 scdk_status_t scdk_validate_grant_access(scdk_cap_t grant_cap,

@@ -10,8 +10,8 @@ operator-visible behavior, and release validation.
 ## Current Baseline
 
 - Completed milestone range: M0-M31
-- SCDK kernel target: `0.4.0-alpha.2`
-- ScadekOS target: `0.1.0-devpreview.2`
+- SCDK kernel target: `0.4.0-alpha.3`
+- ScadekOS target: `0.1.0-devpreview.3`
 - Native interface model: objects, capabilities, endpoints, messages, rings, and grants
 - Native non-goal: POSIX/UNIX as the kernel ABI
 - Current interactive path: framebuffer text console + PS/2 keyboard + TTY endpoint + ScadekOS command runner
@@ -290,8 +290,8 @@ ScadekOS validation:
 
 Expected release markers:
 
-- `SCDK: v0.4.0-alpha.2`
-- `ScadekOS: v0.1.0-devpreview.2`
+- `SCDK: v0.4.0-alpha.3`
+- `ScadekOS: v0.1.0-devpreview.3`
 - `milestone=kernel-os-parallel`
 - `[boot] milestone 31 complete`
 - `[scadekos] interactive console ready`

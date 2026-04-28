@@ -1469,6 +1469,7 @@ static void run_console_grant_write_selftest(void) {
     scdk_cap_t console_endpoint = 0;
     scdk_cap_t source_task = 0;
     scdk_cap_t grant = 0;
+    scdk_cap_t recycled_grant = 0;
     uint64_t phys = 0;
     volatile char *payload;
     struct scdk_message msg;
@@ -1520,7 +1521,25 @@ static void run_console_grant_write_selftest(void) {
     msg.arg1 = 0;
     msg.arg2 = 1;
     status = scdk_endpoint_call(console_endpoint, &msg);
-    require_status("console revoked grant write rejected", status, SCDK_ERR_PERM);
+    require_status("console revoked grant write rejected", status, SCDK_ERR_NOENT);
+
+    for (uint32_t i = 0; i < SCDK_MAX_USER_GRANTS + 4u; i++) {
+        status = scdk_user_grant_create(source_task,
+                                        SCDK_CONSOLE_GRANT_SELFTEST_VIRT,
+                                        sizeof(SCDK_CONSOLE_GRANT_TEST_PAYLOAD) - 1u,
+                                        SCDK_RIGHT_READ,
+                                        console_endpoint,
+                                        &recycled_grant);
+        if (status != SCDK_OK) {
+            scdk_panic("console grant recycle create failed: %lld", (long long)status);
+        }
+
+        status = scdk_user_grant_revoke(recycled_grant);
+        if (status != SCDK_OK) {
+            scdk_panic("console grant recycle revoke failed: %lld", (long long)status);
+        }
+    }
+    scdk_log_write("grant", "user grant recycle pass");
 
     status = scdk_vmm_unmap_page(SCDK_CONSOLE_GRANT_SELFTEST_VIRT);
     require_status("console grant page unmap", status, SCDK_OK);
