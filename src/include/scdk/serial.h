@@ -6,8 +6,11 @@
 
 #include <stdbool.h>
 
+#include <scdk/types.h>
+
 bool scdk_serial_init(void);
-void scdk_serial_write_char(char c);
-void scdk_serial_write_string(const char *s);
+bool scdk_serial_is_available(void);
+scdk_status_t scdk_serial_write_char(char c);
+scdk_status_t scdk_serial_write_string(const char *s);
 
 #endif

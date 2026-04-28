@@ -38,6 +38,7 @@ static scdk_status_t checked_user_range(uintptr_t user_base,
 
 static scdk_status_t user_grant_lookup(scdk_cap_t grant_cap,
                                        uint64_t required_rights,
+                                       bool require_live_binding,
                                        struct scdk_user_grant_slot **out_slot) {
     const struct scdk_cap_entry *entry = 0;
     const struct scdk_object *object = 0;
@@ -64,6 +65,24 @@ static scdk_status_t user_grant_lookup(scdk_cap_t grant_cap,
 
     if (slot->revoked) {
         return SCDK_ERR_PERM;
+    }
+
+    if (require_live_binding) {
+        status = scdk_cap_check(slot->source_task,
+                                SCDK_RIGHT_READ,
+                                SCDK_OBJ_TASK,
+                                0);
+        if (status != SCDK_OK) {
+            return status;
+        }
+
+        status = scdk_cap_check(slot->target_endpoint,
+                                SCDK_RIGHT_SEND,
+                                SCDK_OBJ_ENDPOINT,
+                                0);
+        if (status != SCDK_OK) {
+            return status;
+        }
     }
 
     *out_slot = slot;
@@ -167,7 +186,7 @@ scdk_status_t scdk_user_grant_revoke(scdk_cap_t grant_cap) {
     struct scdk_user_grant_slot *slot = 0;
     scdk_status_t status;
 
-    status = user_grant_lookup(grant_cap, SCDK_RIGHT_REVOKE, &slot);
+    status = user_grant_lookup(grant_cap, SCDK_RIGHT_REVOKE, false, &slot);
     if (status != SCDK_OK) {
         return status;
     }
@@ -183,7 +202,7 @@ scdk_status_t scdk_validate_grant_access(scdk_cap_t grant_cap,
     struct scdk_user_grant_slot *slot = 0;
     scdk_status_t status;
 
-    status = user_grant_lookup(grant_cap, required_rights, &slot);
+    status = user_grant_lookup(grant_cap, required_rights, true, &slot);
     if (status != SCDK_OK) {
         return status;
     }
@@ -204,7 +223,7 @@ scdk_status_t scdk_user_grant_copy_from(scdk_cap_t target_endpoint,
         return SCDK_ERR_INVAL;
     }
 
-    status = user_grant_lookup(grant_cap, SCDK_RIGHT_READ, &slot);
+    status = user_grant_lookup(grant_cap, SCDK_RIGHT_READ, true, &slot);
     if (status != SCDK_OK) {
         return status;
     }

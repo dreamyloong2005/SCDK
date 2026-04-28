@@ -18,6 +18,8 @@ enum scdk_service_id {
     SCDK_SERVICE_VFS = 3,
     SCDK_SERVICE_PROC = 4,
     SCDK_SERVICE_GRANT_TEST = 5,
+    SCDK_SERVICE_DEVMGR = 6,
+    SCDK_SERVICE_TTY = 7,
 };
 
 /*

@@ -6,6 +6,7 @@
 
 #include <stddef.h>
 
+#include <scdk/fault.h>
 #include <scdk/scheduler.h>
 
 typedef scdk_object_id_t scdk_task_id_t;
@@ -51,10 +52,23 @@ scdk_status_t scdk_user_task_run_flat(scdk_cap_t task,
                                       uint64_t hhdm_offset);
 
 /*
+ * Fault-path test helper: run a NEW user task until it triggers the selected
+ * M27 fault path. The fault handler marks the task dead.
+ */
+scdk_status_t scdk_user_task_run_fault_test(scdk_cap_t task,
+                                            enum scdk_fault_user_test test,
+                                            uint64_t hhdm_offset);
+
+/*
  * Control-plane: mark a user task dead after the user exit path returns.
  */
 scdk_status_t scdk_task_exit(scdk_cap_t task,
                              int status_code);
+
+/*
+ * Fault-path: mark the current user task dead after a handled user fault.
+ */
+scdk_status_t scdk_task_fault_current(int status_code);
 
 /*
  * Control-plane: run the current v1 cleanup path for a dead user task.

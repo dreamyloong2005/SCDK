@@ -7,11 +7,14 @@
 
 #include <scdk/address_space.h>
 #include <scdk/capability.h>
-#include <scdk/console_service.h>
+#include <scdk/console.h>
+#include <scdk/devmgr.h>
 #include <scdk/endpoint.h>
+#include <scdk/fault.h>
 #include <scdk/grant.h>
 #include <scdk/heap.h>
 #include <scdk/initrd.h>
+#include <scdk/keyboard.h>
 #include <scdk/loader.h>
 #include <scdk/log.h>
 #include <scdk/message.h>
@@ -19,23 +22,37 @@
 #include <scdk/object.h>
 #include <scdk/panic.h>
 #include <scdk/proc_service.h>
+#include <scdk/revoke.h>
 #include <scdk/ring.h>
 #include <scdk/scheduler.h>
 #include <scdk/service.h>
 #include <scdk/string.h>
 #include <scdk/task.h>
 #include <scdk/thread.h>
+#include <scdk/timer.h>
 #include <scdk/tmpfs.h>
+#include <scdk/tty.h>
 #include <scdk/user_grant.h>
+#include <scdk/user_ipc.h>
 #include <scdk/usermode.h>
 #include <scdk/vfs.h>
 
 #define SCDK_VMM_SELFTEST_VIRT 0xffffffffc0000000ull
 #define SCDK_ASPACE_SELFTEST_VIRT 0x0000000000400000ull
+#define SCDK_REVOKE_USER_GRANT_VIRT 0x0000000000600000ull
+#define SCDK_CONSOLE_GRANT_SELFTEST_VIRT 0x0000000000700000ull
 #define SCDK_USER_GRANT_TEST_PAYLOAD "grant payload"
+#define SCDK_CONSOLE_GRANT_TEST_PAYLOAD "console grant path"
 
 static const struct limine_memmap_response *selftest_memmap;
 static uint64_t selftest_hhdm_offset;
+static volatile bool preempt_thread_a_started;
+static volatile bool preempt_thread_b_started;
+static volatile bool preempt_thread_a_done;
+static volatile bool preempt_thread_a_observed;
+static volatile bool preempt_thread_b_observed;
+static volatile uint64_t preempt_thread_a_tick;
+static volatile uint64_t preempt_thread_b_tick;
 
 void scdk_selftest_set_boot_context(const struct limine_memmap_response *memmap,
                                     uint64_t hhdm_offset) {
@@ -113,6 +130,8 @@ static void run_object_capability_selftest(void) {
 static void run_endpoint_message_selftest(void) {
     scdk_cap_t console_endpoint = 0;
     scdk_cap_t looked_up_endpoint = 0;
+    scdk_cap_t tty_endpoint = 0;
+    scdk_cap_t looked_up_tty = 0;
     struct scdk_message msg;
     scdk_status_t status;
 
@@ -123,6 +142,14 @@ static void run_endpoint_message_selftest(void) {
 
     status = scdk_log_set_console_endpoint(console_endpoint);
     require_status("console log route", status, SCDK_OK);
+
+    status = scdk_console_backend_ready();
+    require_status("console backend ready", status, SCDK_OK);
+    scdk_log_write("console", "backend ready");
+
+    status = scdk_console_direct_access_audit();
+    require_status("console direct hardware access audit", status, SCDK_OK);
+    scdk_log_write("console", "direct hardware access audit pass");
 
     status = scdk_service_lookup(SCDK_SERVICE_CONSOLE, &looked_up_endpoint);
     require_status("console service lookup", status, SCDK_OK);
@@ -153,6 +180,40 @@ static void run_endpoint_message_selftest(void) {
 
     status = scdk_endpoint_call(0, &msg);
     require_status("endpoint invalid cap rejected", status, SCDK_ERR_INVAL);
+
+    scdk_message_init(&msg, 0, SCDK_SERVICE_CONSOLE, SCDK_MSG_CONSOLE_GET_INFO);
+    status = scdk_endpoint_call(looked_up_endpoint, &msg);
+    require_status("console get info", status, SCDK_OK);
+    if (msg.arg0 == 0u || msg.arg1 == 0u) {
+        scdk_panic("console info returned empty geometry");
+    }
+    scdk_log_write("test", "console info path pass");
+
+    scdk_message_init(&msg, 0, SCDK_SERVICE_CONSOLE, SCDK_MSG_CONSOLE_CLEAR);
+    status = scdk_endpoint_call(looked_up_endpoint, &msg);
+    require_status("console clear", status, SCDK_OK);
+    scdk_log_write("test", "console clear path pass");
+
+    status = scdk_tty_service_init(&tty_endpoint);
+    require_status("tty service init", status, SCDK_OK);
+
+    status = scdk_service_lookup(SCDK_SERVICE_TTY, &looked_up_tty);
+    require_status("tty service lookup", status, SCDK_OK);
+    if (looked_up_tty != tty_endpoint) {
+        scdk_panic("tty service endpoint mismatch");
+    }
+
+    status = scdk_keyboard_inject_test_key('a');
+    require_status("tty inject key", status, SCDK_OK);
+
+    scdk_message_init(&msg, 0, SCDK_SERVICE_TTY, SCDK_MSG_TTY_POLL_EVENT);
+    status = scdk_endpoint_call(looked_up_tty, &msg);
+    require_status("tty poll event", status, SCDK_OK);
+    if ((uint32_t)msg.arg2 != 'a' ||
+        (uint32_t)(msg.arg1 >> 32u) != SCDK_INPUT_KEY_DOWN) {
+        scdk_panic("tty event payload mismatch");
+    }
+    scdk_log_write("tty", "input event path pass");
 
     scdk_log_write("test", "endpoint: pass");
     scdk_log_write("test", "console: pass");
@@ -1310,6 +1371,72 @@ static void run_user_grant_selftest(void) {
     scdk_log_write("test", "user grant: pass");
 }
 
+static void run_console_grant_write_selftest(void) {
+    scdk_cap_t console_endpoint = 0;
+    scdk_cap_t source_task = 0;
+    scdk_cap_t grant = 0;
+    uint64_t phys = 0;
+    volatile char *payload;
+    struct scdk_message msg;
+    scdk_status_t status;
+
+    scdk_log_write("test", "console grant-write self-test start");
+
+    status = scdk_service_lookup(SCDK_SERVICE_CONSOLE, &console_endpoint);
+    require_status("console grant service lookup", status, SCDK_OK);
+
+    status = scdk_page_alloc(&phys);
+    require_status("console grant page alloc", status, SCDK_OK);
+
+    status = scdk_vmm_map_page(SCDK_CONSOLE_GRANT_SELFTEST_VIRT,
+                               phys,
+                               SCDK_VMM_MAP_USER | SCDK_VMM_MAP_WRITE);
+    require_status("console grant page map", status, SCDK_OK);
+
+    payload = (volatile char *)(uintptr_t)SCDK_CONSOLE_GRANT_SELFTEST_VIRT;
+    for (uint32_t i = 0; i < sizeof(SCDK_CONSOLE_GRANT_TEST_PAYLOAD) - 1u; i++) {
+        payload[i] = SCDK_CONSOLE_GRANT_TEST_PAYLOAD[i];
+    }
+
+    status = scdk_task_create(SCDK_BOOT_CORE, 0, &source_task);
+    require_status("console grant source task create", status, SCDK_OK);
+
+    status = scdk_user_grant_create(source_task,
+                                    SCDK_CONSOLE_GRANT_SELFTEST_VIRT,
+                                    sizeof(SCDK_CONSOLE_GRANT_TEST_PAYLOAD) - 1u,
+                                    SCDK_RIGHT_READ,
+                                    console_endpoint,
+                                    &grant);
+    require_status("console grant create", status, SCDK_OK);
+
+    scdk_message_init(&msg, 0, SCDK_SERVICE_CONSOLE, SCDK_MSG_CONSOLE_WRITE);
+    msg.arg0 = grant;
+    msg.arg1 = 0;
+    msg.arg2 = sizeof(SCDK_CONSOLE_GRANT_TEST_PAYLOAD) - 1u;
+    msg.arg3 = 0;
+    status = scdk_endpoint_call(console_endpoint, &msg);
+    require_status("console grant write", status, SCDK_OK);
+    scdk_log_write("console", "grant write path pass");
+
+    status = scdk_user_grant_revoke(grant);
+    require_status("console grant revoke", status, SCDK_OK);
+
+    scdk_message_init(&msg, 0, SCDK_SERVICE_CONSOLE, SCDK_MSG_CONSOLE_WRITE);
+    msg.arg0 = grant;
+    msg.arg1 = 0;
+    msg.arg2 = 1;
+    status = scdk_endpoint_call(console_endpoint, &msg);
+    require_status("console revoked grant write rejected", status, SCDK_ERR_PERM);
+
+    status = scdk_vmm_unmap_page(SCDK_CONSOLE_GRANT_SELFTEST_VIRT);
+    require_status("console grant page unmap", status, SCDK_OK);
+
+    status = scdk_page_free(phys);
+    require_status("console grant page free", status, SCDK_OK);
+
+    scdk_log_write("test", "console grant-write: pass");
+}
+
 static void run_user_ring_selftest(void) {
     scdk_cap_t task = 0;
     scdk_cap_t main_thread = 0;
@@ -1343,6 +1470,440 @@ static void run_user_ring_selftest(void) {
     scdk_log_write("test", "user ring: pass");
 }
 
+static scdk_status_t revoke_test_endpoint_handler(scdk_cap_t endpoint,
+                                                  struct scdk_message *msg,
+                                                  void *context) {
+    (void)endpoint;
+    (void)msg;
+    (void)context;
+    return SCDK_OK;
+}
+
+static void run_revoke_selftest(void) {
+    scdk_object_id_t object_id = 0;
+    scdk_cap_t cap = 0;
+    scdk_cap_t replacement = 0;
+    scdk_cap_t endpoint = 0;
+    scdk_cap_t grant_endpoint = 0;
+    scdk_cap_t ring = 0;
+    scdk_cap_t bound = 0;
+    scdk_cap_t source_task = 0;
+    scdk_cap_t user_grant = 0;
+    uint64_t phys = 0;
+    const struct scdk_cap_entry *entry = 0;
+    scdk_status_t status;
+
+    scdk_log_write("test", "revoke self-test start");
+
+    status = scdk_object_create(SCDK_OBJ_SERVICE,
+                                SCDK_BOOT_CORE,
+                                0,
+                                0,
+                                &object_id);
+    require_status("revoke object create", status, SCDK_OK);
+
+    status = scdk_cap_create(object_id,
+                             SCDK_RIGHT_READ | SCDK_RIGHT_WRITE,
+                             &cap);
+    require_status("revoke cap create", status, SCDK_OK);
+
+    status = scdk_cap_check(cap, SCDK_RIGHT_READ, SCDK_OBJ_SERVICE, 0);
+    require_status("revoke cap precheck", status, SCDK_OK);
+
+    status = scdk_revoke_capability(cap);
+    require_status("revoke cap", status, SCDK_OK);
+
+    status = scdk_cap_lookup(cap, &entry);
+    require_status("revoked cap lookup rejected", status, SCDK_ERR_NOENT);
+    scdk_log_write("revoke", "cap revoke pass");
+
+    status = scdk_cap_create(object_id, SCDK_RIGHT_READ, &replacement);
+    require_status("revoke replacement cap create", status, SCDK_OK);
+    if (replacement == cap) {
+        scdk_panic("revoked capability token was reused without generation bump");
+    }
+
+    status = scdk_cap_check(cap, SCDK_RIGHT_READ, SCDK_OBJ_SERVICE, 0);
+    require_status("stale cap generation rejected", status, SCDK_ERR_NOENT);
+    scdk_log_write("revoke", "stale generation reject pass");
+
+    status = scdk_cap_check(replacement, SCDK_RIGHT_READ, SCDK_OBJ_SERVICE, 0);
+    require_status("replacement cap check", status, SCDK_OK);
+
+    status = scdk_endpoint_create(SCDK_BOOT_CORE,
+                                  revoke_test_endpoint_handler,
+                                  0,
+                                  &endpoint);
+    require_status("revoke ring endpoint create", status, SCDK_OK);
+
+    status = scdk_ring_create(SCDK_BOOT_CORE, 4u, 0, &ring);
+    require_status("revoke ring create", status, SCDK_OK);
+
+    status = scdk_ring_bind_target(ring, endpoint);
+    require_status("revoke ring bind", status, SCDK_OK);
+
+    status = scdk_revoke_capability(endpoint);
+    require_status("revoke ring endpoint cap", status, SCDK_OK);
+
+    status = scdk_ring_bound_target(ring, &bound);
+    require_status("revoke ring bound target rejected", status, SCDK_ERR_NOENT);
+    scdk_log_write("revoke", "ring binding reject pass");
+
+    status = scdk_page_alloc(&phys);
+    require_status("revoke user grant page alloc", status, SCDK_OK);
+
+    status = scdk_vmm_map_page(SCDK_REVOKE_USER_GRANT_VIRT,
+                               phys,
+                               SCDK_VMM_MAP_USER | SCDK_VMM_MAP_WRITE);
+    require_status("revoke user grant page map", status, SCDK_OK);
+
+    status = scdk_task_create(SCDK_BOOT_CORE, 0, &source_task);
+    require_status("revoke grant source task create", status, SCDK_OK);
+
+    status = scdk_endpoint_create(SCDK_BOOT_CORE,
+                                  revoke_test_endpoint_handler,
+                                  0,
+                                  &grant_endpoint);
+    require_status("revoke grant endpoint create", status, SCDK_OK);
+
+    status = scdk_user_grant_create(source_task,
+                                    SCDK_REVOKE_USER_GRANT_VIRT,
+                                    16u,
+                                    SCDK_RIGHT_READ,
+                                    grant_endpoint,
+                                    &user_grant);
+    require_status("revoke user grant create", status, SCDK_OK);
+
+    status = scdk_validate_grant_access(user_grant,
+                                        0,
+                                        1,
+                                        SCDK_RIGHT_READ);
+    require_status("revoke user grant precheck", status, SCDK_OK);
+
+    status = scdk_revoke_capability(grant_endpoint);
+    require_status("revoke grant endpoint cap", status, SCDK_OK);
+
+    status = scdk_validate_grant_access(user_grant,
+                                        0,
+                                        1,
+                                        SCDK_RIGHT_READ);
+    require_status("revoke grant binding rejected", status, SCDK_ERR_NOENT);
+    scdk_log_write("revoke", "grant binding reject pass");
+
+    status = scdk_vmm_unmap_page(SCDK_REVOKE_USER_GRANT_VIRT);
+    require_status("revoke user grant page unmap", status, SCDK_OK);
+
+    status = scdk_page_free(phys);
+    require_status("revoke user grant page free", status, SCDK_OK);
+
+    scdk_log_write("test", "revoke: pass");
+}
+
+static void run_one_fault_selftest(enum scdk_fault_user_test test,
+                                   const char *name) {
+    scdk_cap_t task = 0;
+    scdk_cap_t aspace = 0;
+    scdk_cap_t main_thread = 0;
+    uint32_t task_state = SCDK_TASK_NONE;
+    uint32_t thread_state = SCDK_THREAD_NONE;
+    scdk_status_t status;
+
+    scdk_fault_reset_test_state();
+
+    status = scdk_user_task_create(&task, &aspace, &main_thread);
+    require_status(name, status, SCDK_OK);
+
+    status = scdk_user_task_run_fault_test(task, test, selftest_hhdm_offset);
+    require_status(name, status, SCDK_OK);
+
+    status = scdk_user_task_state(task, &task_state);
+    require_status(name, status, SCDK_OK);
+    if (task_state != SCDK_TASK_DEAD) {
+        scdk_panic("%s did not kill the user task", name);
+    }
+
+    status = scdk_user_thread_state(main_thread, &thread_state);
+    require_status(name, status, SCDK_OK);
+    if (thread_state != SCDK_THREAD_DEAD) {
+        scdk_panic("%s did not kill the user thread", name);
+    }
+
+    switch (test) {
+    case SCDK_FAULT_TEST_PAGE_FAULT:
+        if (!scdk_fault_saw_user_page_fault()) {
+            scdk_panic("page fault self-test did not reach fault handler");
+        }
+        scdk_log_write("sched", "continuing");
+        break;
+    case SCDK_FAULT_TEST_INVALID_SYSCALL:
+        if (!scdk_fault_saw_invalid_syscall()) {
+            scdk_panic("invalid syscall self-test did not reach fault handler");
+        }
+        break;
+    case SCDK_FAULT_TEST_BAD_POINTER:
+        if (!scdk_fault_saw_bad_user_pointer()) {
+            scdk_panic("bad pointer self-test did not reach fault handler");
+        }
+        break;
+    default:
+        scdk_panic("unknown fault self-test kind");
+    }
+
+    status = scdk_task_cleanup(task);
+    require_status(name, status, SCDK_OK);
+}
+
+static void run_fault_selftest(void) {
+    scdk_log_write("test", "fault self-test start");
+
+    run_one_fault_selftest(SCDK_FAULT_TEST_PAGE_FAULT,
+                           "fault user page fault");
+    run_one_fault_selftest(SCDK_FAULT_TEST_INVALID_SYSCALL,
+                           "fault invalid syscall");
+    run_one_fault_selftest(SCDK_FAULT_TEST_BAD_POINTER,
+                           "fault bad user pointer");
+
+    scdk_log_write("test", "fault: pass");
+}
+
+static void preempt_pause(void) {
+    __asm__ volatile ("pause" ::: "memory");
+}
+
+static void preempt_thread_a(void *arg) {
+    (void)arg;
+
+    scdk_timer_enable_preemption();
+    preempt_thread_a_tick = scdk_timer_ticks();
+    preempt_thread_a_started = true;
+
+    while (!preempt_thread_b_started) {
+        preempt_pause();
+    }
+
+    while (scdk_timer_ticks() == preempt_thread_a_tick) {
+        preempt_pause();
+    }
+
+    preempt_thread_a_observed = true;
+    preempt_thread_a_done = true;
+}
+
+static void preempt_thread_b(void *arg) {
+    (void)arg;
+
+    preempt_thread_b_tick = scdk_timer_ticks();
+    preempt_thread_b_started = true;
+
+    while (!preempt_thread_a_done) {
+        preempt_pause();
+    }
+
+    while (scdk_timer_ticks() == preempt_thread_b_tick) {
+        preempt_pause();
+    }
+
+    preempt_thread_b_observed = true;
+}
+
+static void run_timer_preemption_selftest(void) {
+    scdk_cap_t task = 0;
+    scdk_cap_t thread_a = 0;
+    scdk_cap_t thread_b = 0;
+    uint32_t state = SCDK_THREAD_NONE;
+    uint64_t start_ticks;
+    scdk_status_t status;
+
+    scdk_log_write("test", "timer/preemption self-test start");
+
+    status = scdk_timer_init(1000u);
+    require_status("timer init", status, SCDK_OK);
+    scdk_log_write("timer", "init ok");
+
+    preempt_thread_a_started = false;
+    preempt_thread_b_started = false;
+    preempt_thread_a_done = false;
+    preempt_thread_a_observed = false;
+    preempt_thread_b_observed = false;
+    preempt_thread_a_tick = 0;
+    preempt_thread_b_tick = 0;
+
+    status = scdk_task_create(SCDK_BOOT_CORE, 0, &task);
+    require_status("timer preempt task create", status, SCDK_OK);
+
+    status = scdk_thread_create(task, preempt_thread_a, 0, &thread_a);
+    require_status("timer preempt thread A create", status, SCDK_OK);
+
+    status = scdk_thread_create(task, preempt_thread_b, 0, &thread_b);
+    require_status("timer preempt thread B create", status, SCDK_OK);
+
+    status = scdk_thread_start(thread_a);
+    require_status("timer preempt thread A start", status, SCDK_OK);
+
+    status = scdk_thread_start(thread_b);
+    require_status("timer preempt thread B start", status, SCDK_OK);
+
+    start_ticks = scdk_timer_ticks();
+    scdk_scheduler_run();
+    scdk_timer_disable_preemption();
+
+    if (!scdk_timer_tick_seen() || scdk_timer_ticks() == start_ticks) {
+        scdk_panic("timer did not tick during preemption self-test");
+    }
+    scdk_log_write("timer", "tick ok");
+
+    if (!preempt_thread_a_observed || !preempt_thread_b_observed) {
+        scdk_panic("timer preemption did not switch both worker threads");
+    }
+
+    scdk_log_write("sched", "preempt thread A");
+    scdk_log_write("sched", "preempt thread B");
+
+    status = scdk_thread_state(thread_a, &state);
+    require_status("timer preempt thread A dead state", status, SCDK_OK);
+    if (state != SCDK_THREAD_DEAD) {
+        scdk_panic("timer preempt thread A did not finish");
+    }
+
+    status = scdk_thread_state(thread_b, &state);
+    require_status("timer preempt thread B dead state", status, SCDK_OK);
+    if (state != SCDK_THREAD_DEAD) {
+        scdk_panic("timer preempt thread B did not finish");
+    }
+
+    scdk_log_write("test", "timer/preemption: pass");
+}
+
+static scdk_status_t devmgr_test_endpoint_handler(scdk_cap_t endpoint,
+                                                  struct scdk_message *msg,
+                                                  void *context) {
+    (void)endpoint;
+    (void)msg;
+    (void)context;
+    return SCDK_OK;
+}
+
+static void run_devmgr_selftest(void) {
+    scdk_cap_t endpoint = 0;
+    scdk_cap_t looked_up = 0;
+    scdk_cap_t target_endpoint = 0;
+    scdk_cap_t device = 0;
+    scdk_cap_t queue = 0;
+    scdk_cap_t read_only_queue = 0;
+    const struct scdk_cap_entry *entry = 0;
+    struct scdk_message msg;
+    scdk_status_t status;
+
+    scdk_log_write("test", "devmgr self-test start");
+
+    status = scdk_devmgr_service_init(&endpoint);
+    require_status("devmgr service init", status, SCDK_OK);
+
+    status = scdk_service_lookup(SCDK_SERVICE_DEVMGR, &looked_up);
+    require_status("devmgr service lookup", status, SCDK_OK);
+    if (looked_up != endpoint) {
+        scdk_panic("devmgr service endpoint mismatch");
+    }
+
+    scdk_message_init(&msg,
+                      0,
+                      SCDK_SERVICE_DEVMGR,
+                      SCDK_MSG_DEVICE_REGISTER);
+    msg.arg0 = SCDK_DEVMGR_FAKE_DEVICE_ID;
+    status = scdk_endpoint_call(looked_up, &msg);
+    require_status("devmgr fake device register", status, SCDK_OK);
+
+    device = (scdk_cap_t)msg.arg0;
+    queue = (scdk_cap_t)msg.arg1;
+    if (device == 0 || queue == 0) {
+        scdk_panic("devmgr did not return device and queue caps");
+    }
+
+    status = scdk_cap_check(device,
+                            SCDK_RIGHT_READ,
+                            SCDK_OBJ_DEVICE,
+                            0);
+    require_status("devmgr device cap check", status, SCDK_OK);
+
+    status = scdk_cap_check(queue,
+                            SCDK_RIGHT_BIND,
+                            SCDK_OBJ_DEVICE_QUEUE,
+                            &entry);
+    require_status("devmgr queue cap check", status, SCDK_OK);
+
+    status = scdk_endpoint_create(SCDK_BOOT_CORE,
+                                  devmgr_test_endpoint_handler,
+                                  0,
+                                  &target_endpoint);
+    require_status("devmgr target endpoint create", status, SCDK_OK);
+
+    scdk_message_init(&msg,
+                      0,
+                      SCDK_SERVICE_DEVMGR,
+                      SCDK_MSG_DEVICE_QUEUE_BIND);
+    msg.arg0 = queue;
+    msg.arg1 = target_endpoint;
+    status = scdk_endpoint_call(looked_up, &msg);
+    require_status("devmgr queue bind", status, SCDK_OK);
+
+    status = scdk_cap_create(entry->object_id,
+                             SCDK_RIGHT_READ,
+                             &read_only_queue);
+    require_status("devmgr read-only queue cap create", status, SCDK_OK);
+
+    scdk_message_init(&msg,
+                      0,
+                      SCDK_SERVICE_DEVMGR,
+                      SCDK_MSG_DEVICE_QUEUE_BIND);
+    msg.arg0 = read_only_queue;
+    msg.arg1 = target_endpoint;
+    status = scdk_endpoint_call(looked_up, &msg);
+    require_status("devmgr unauthorized queue bind rejected", status, SCDK_ERR_PERM);
+    scdk_log_write("devmgr", "unauthorized queue bind reject pass");
+
+    status = scdk_revoke_capability(queue);
+    require_status("devmgr queue cap revoke", status, SCDK_OK);
+
+    scdk_message_init(&msg,
+                      0,
+                      SCDK_SERVICE_DEVMGR,
+                      SCDK_MSG_DEVICE_QUEUE_BIND);
+    msg.arg0 = queue;
+    msg.arg1 = target_endpoint;
+    status = scdk_endpoint_call(looked_up, &msg);
+    require_status("devmgr revoked queue cap rejected", status, SCDK_ERR_NOENT);
+
+    scdk_log_write("test", "devmgr: pass");
+}
+
+static void run_m30_architecture_review_selftest(void) {
+    scdk_status_t status;
+
+    scdk_log_write("m30", "architecture review start");
+
+    status = scdk_cap_check(0, SCDK_RIGHT_READ, SCDK_OBJ_SERVICE, 0);
+    require_status("m30 invalid cap rejected", status, SCDK_ERR_INVAL);
+    scdk_log_write("m30", "capability boundary review pass");
+
+    status = scdk_console_direct_access_audit();
+    require_status("m30 hardware access audit", status, SCDK_OK);
+    scdk_log_write("m30", "hardware access review pass");
+
+    status = scdk_user_validate_range(0,
+                                      sizeof(struct scdk_message),
+                                      false);
+    require_status("m30 null user pointer rejected", status, SCDK_ERR_BOUNDS);
+    scdk_log_write("m30", "user pointer review pass");
+
+    /*
+     * The detailed ring/grant cases are exercised by the user ring, revoke,
+     * and grant self-tests above. M30 keeps a final boot marker so the audit is
+     * visible in serial logs.
+     */
+    scdk_log_write("m30", "ring/grant review pass");
+    scdk_log_write("m30", "architecture review complete");
+}
+
 scdk_status_t scdk_run_core_selftests(void) {
     if (selftest_memmap == 0 || selftest_hhdm_offset == 0u) {
         return SCDK_ERR_INVAL;
@@ -1365,7 +1926,13 @@ scdk_status_t scdk_run_core_selftests(void) {
     run_loader_selftest();
     run_proc_selftest();
     run_user_grant_selftest();
+    run_console_grant_write_selftest();
     run_user_ring_selftest();
+    run_revoke_selftest();
+    run_fault_selftest();
+    run_timer_preemption_selftest();
+    run_devmgr_selftest();
+    run_m30_architecture_review_selftest();
 
     scdk_log_write("test", "all core tests passed");
     return SCDK_OK;

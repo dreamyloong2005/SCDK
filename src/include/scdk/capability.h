@@ -28,6 +28,7 @@ struct scdk_cap_entry {
     scdk_object_id_t object_id;
     uint32_t generation;
     uint32_t object_type;
+    uint32_t revoked;
     uint64_t rights;
 };
 
@@ -57,8 +58,15 @@ scdk_status_t scdk_cap_check(scdk_cap_t cap,
                              const struct scdk_cap_entry **out_entry);
 
 /*
- * Control-plane: revoke placeholder.
- * Requires a valid cap token; full revocation waits for generation-aware users.
+ * Control-plane: revoke one capability table entry.
+ * Requires a valid cap token. The current token becomes stale immediately;
+ * future lookups and rights checks fail.
+ */
+scdk_status_t scdk_cap_revoke(scdk_cap_t cap);
+
+/*
+ * Control-plane: legacy revoke entry point kept for older milestone tests.
+ * Equivalent to scdk_cap_revoke().
  */
 scdk_status_t scdk_cap_revoke_stub(scdk_cap_t cap);
 

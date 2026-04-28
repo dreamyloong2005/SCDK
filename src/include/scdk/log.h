@@ -5,6 +5,7 @@
 #define SCDK_LOG_H
 
 #include <stdarg.h>
+#include <stddef.h>
 
 #include <scdk/capability.h>
 #include <scdk/types.h>
@@ -14,6 +15,13 @@
  * Requires SCDK_RIGHT_SEND on an SCDK_OBJ_ENDPOINT capability.
  */
 scdk_status_t scdk_log_set_console_endpoint(scdk_cap_t endpoint);
+
+/*
+ * Diagnostic sink: copy the in-memory trace buffer used before or alongside
+ * hardware-backed sinks. If dst is null, the current trace length is returned.
+ */
+size_t scdk_log_trace_copy(char *dst, size_t capacity);
+size_t scdk_log_trace_size(void);
 
 void scdk_log_write(const char *level, const char *fmt, ...);
 void scdk_log_vwrite(const char *level, const char *fmt, va_list args);

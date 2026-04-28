@@ -18,11 +18,11 @@ user-space compatibility layer, but it is not the native kernel API.
 
 ## Version
 
-Current version: `0.3.0-alpha.2`
+Current version: `0.4.0-alpha.1`
 
 ## Current Milestone
 
-This tree currently implements Milestone 0 through Milestone 24:
+This tree currently implements Milestone 0 through Milestone 30:
 
 - Limine bootable ISO
 - higher-half x86_64 freestanding kernel ELF
@@ -94,6 +94,35 @@ This tree currently implements Milestone 0 through Milestone 24:
 - user rings bound to endpoint capabilities and owned by the source task
 - console service consumes ring descriptors and reads payloads through grants
 - ring-test user executable submits and polls a batch of 16 completions
+- console frontend split from the serial/framebuffer backend
+- normal console output routed through endpoint/message or ring/grant frontend paths
+- direct serial/framebuffer writes audited and isolated to early boot, panic, arch drivers, and console backend
+- capability revocation with stale-generation rejection
+- revoked capabilities rejected by future lookup and rights checks
+- ring endpoint bindings reject revoked target endpoint capabilities
+- user grant endpoint bindings reject revoked target endpoint capabilities
+- minimal x86_64 #PF/#GP/#UD fault gates
+- user page faults kill only the offending task
+- invalid syscall and bad user pointer paths route through fault handling
+- kernel faults still panic
+- single-core PIT timer interrupt path
+- timer tick counter and IRQ0 handling through the x86_64 IDT
+- minimal timer-driven preemption over kernel threads
+- kernel-resident device manager service endpoint
+- fake device and device-queue objects protected by capabilities
+- queue bind authorization through device-queue capabilities
+- unauthorized and revoked queue capability rejection tests
+- M30 architecture review documentation and invariant checklist
+- repeatable source-level architecture check script
+- boot-time architecture review serial markers
+- early console wrapper for COM1 boot/panic output
+- framebuffer text console backend with clear, cursor, backspace, tab, newline, and scroll handling
+- console backend router with serial mirror and framebuffer text output
+- SCDK-native console messages for grant-backed write, clear, and info
+- PS/2 keyboard polling backend with printable US ASCII, Enter, Backspace, Tab, and Shift handling
+- TTY/input service endpoint with input event polling
+- console/TTY self-tests for grant write and input event paths
+- direct console/input hardware access audit script
 
 Full filesystem and full user-space support are intentionally not implemented yet.
 
@@ -123,14 +152,26 @@ build/scdk.iso
 tools/run-qemu.sh
 ```
 
-Expected serial output includes:
+Expected serial output, or framebuffer text output when serial is absent,
+includes:
 
 ```text
 [boot] SCDK kernel entered
-[boot] serial ok
+[console] serial debug sink enabled
+SCDK framebuffer boot console ready
 [boot] framebuffer ok
 [boot] memory map received
 [boot] capability core initialized
+[console] backend init ok
+[console] framebuffer text backend ok
+[console] serial mirror backend ok
+[console] frontend ready
+[console] service endpoint registered
+[console] backend ready
+[console] direct hardware access audit pass
+[input] ps2 keyboard backend ok
+[tty] service endpoint registered
+[tty] input event path pass
 [boot] endpoint/message core initialized
 [boot] console service initialized
 [boot] ring core initialized
@@ -192,13 +233,41 @@ Expected serial output includes:
 [grant] write denied pass
 [grant] bounds reject pass
 [grant] revoke pass
+[console] grant write path pass
 [loader] loading /ring-test
 [ring] user ring create pass
 [ring] submit batch 16
 [ring] completion batch 16 pass
+[revoke] cap revoke pass
+[revoke] stale generation reject pass
+[revoke] ring binding reject pass
+[revoke] grant binding reject pass
+[fault] user page fault
+[fault] task killed
+[sched] continuing
+[fault] invalid syscall handled
+[fault] bad user pointer handled
+[timer] init ok
+[timer] tick ok
+[sched] preempt thread A
+[sched] preempt thread B
+[devmgr] service started
+[devmgr] fake device registered
+[devmgr] queue capability created
+[devmgr] queue bind pass
+[devmgr] unauthorized queue bind reject pass
+[m30] architecture review start
+[m30] capability boundary review pass
+[m30] hardware access review pass
+[m30] user pointer review pass
+[m30] ring/grant review pass
+[m30] architecture review complete
 [test] all core tests passed
-[boot] milestone 24 complete
+[boot] milestone 30 complete
 ```
+
+COM1 serial is an optional debug sink. The ISO is expected to boot with
+`-serial none` and still show visible framebuffer text output.
 
 ## VMware
 

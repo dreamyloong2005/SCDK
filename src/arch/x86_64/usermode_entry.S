@@ -113,4 +113,48 @@ scdk_user_test_stub_start:
 scdk_user_test_stub_end:
 .size scdk_user_test_stub_start, . - scdk_user_test_stub_start
 
+.global scdk_user_page_fault_stub_start
+.global scdk_user_page_fault_stub_end
+.type scdk_user_page_fault_stub_start, @function
+scdk_user_page_fault_stub_start:
+    movq 0, %rax
+    movq $3, %rax
+    syscall
+.Lpage_fault_halt:
+    pause
+    jmp .Lpage_fault_halt
+scdk_user_page_fault_stub_end:
+.size scdk_user_page_fault_stub_start, . - scdk_user_page_fault_stub_start
+
+.global scdk_user_invalid_syscall_stub_start
+.global scdk_user_invalid_syscall_stub_end
+.type scdk_user_invalid_syscall_stub_start, @function
+scdk_user_invalid_syscall_stub_start:
+    movq $0xdeadbeef, %rax
+    syscall
+    movq $3, %rax
+    syscall
+.Linvalid_syscall_halt:
+    pause
+    jmp .Linvalid_syscall_halt
+scdk_user_invalid_syscall_stub_end:
+.size scdk_user_invalid_syscall_stub_start, . - scdk_user_invalid_syscall_stub_start
+
+.global scdk_user_bad_pointer_stub_start
+.global scdk_user_bad_pointer_stub_end
+.type scdk_user_bad_pointer_stub_start, @function
+scdk_user_bad_pointer_stub_start:
+    movq %rdi, %rbx
+    movq $1, %rax
+    movq %rbx, %rdi
+    movq $0x200000, %rsi
+    syscall
+    movq $3, %rax
+    syscall
+.Lbad_pointer_halt:
+    pause
+    jmp .Lbad_pointer_halt
+scdk_user_bad_pointer_stub_end:
+.size scdk_user_bad_pointer_stub_start, . - scdk_user_bad_pointer_stub_start
+
 .section .note.GNU-stack,"",@progbits

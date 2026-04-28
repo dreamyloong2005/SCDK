@@ -57,8 +57,10 @@ scdk_status_t scdk_ring_create(uint32_t owner_core,
     }
 
     if (bound_target != 0) {
-        const struct scdk_cap_entry *target = 0;
-        scdk_status_t status = scdk_cap_lookup(bound_target, &target);
+        scdk_status_t status = scdk_cap_check(bound_target,
+                                              SCDK_RIGHT_SEND,
+                                              SCDK_OBJ_ENDPOINT,
+                                              0);
         if (status != SCDK_OK) {
             return status;
         }
@@ -138,6 +140,16 @@ scdk_status_t scdk_ring_bound_target(scdk_cap_t ring,
     status = ring_lookup(ring, SCDK_RIGHT_READ, &target_ring);
     if (status != SCDK_OK) {
         return status;
+    }
+
+    if (target_ring->bound_target != 0) {
+        status = scdk_cap_check(target_ring->bound_target,
+                                SCDK_RIGHT_SEND,
+                                SCDK_OBJ_ENDPOINT,
+                                0);
+        if (status != SCDK_OK) {
+            return status;
+        }
     }
 
     *out_target = target_ring->bound_target;

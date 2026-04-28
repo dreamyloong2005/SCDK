@@ -57,6 +57,12 @@ extern void scdk_enter_usermode_asm(uint64_t entry,
                                     scdk_cap_t bootstrap_endpoint);
 extern const uint8_t scdk_user_test_stub_start[];
 extern const uint8_t scdk_user_test_stub_end[];
+extern const uint8_t scdk_user_page_fault_stub_start[];
+extern const uint8_t scdk_user_page_fault_stub_end[];
+extern const uint8_t scdk_user_invalid_syscall_stub_start[];
+extern const uint8_t scdk_user_invalid_syscall_stub_end[];
+extern const uint8_t scdk_user_bad_pointer_stub_start[];
+extern const uint8_t scdk_user_bad_pointer_stub_end[];
 
 static uint64_t gdt[8];
 static struct x86_tss tss;
@@ -131,7 +137,12 @@ scdk_status_t scdk_usermode_init(uint64_t syscall_stack_top) {
     set_tss_descriptor(6u, (uintptr_t)&tss, sizeof(tss) - 1u);
     load_gdt_and_tss();
 
-    scdk_status_t status = scdk_syscall_init(syscall_stack_top);
+    scdk_status_t status = scdk_fault_init();
+    if (status != SCDK_OK) {
+        return status;
+    }
+
+    status = scdk_syscall_init(syscall_stack_top);
     if (status != SCDK_OK) {
         return status;
     }
@@ -428,6 +439,181 @@ cleanup:
         if (code_phys[i] != 0u) {
             (void)scdk_page_free(code_phys[i]);
         }
+    }
+
+    if (saved_syscall_state_valid) {
+        scdk_syscall_restore_task_state(&saved_syscall_state);
+    }
+
+    if (task_syscall_stack != 0) {
+        scdk_kfree(task_syscall_stack);
+    }
+
+    return status;
+}
+
+static scdk_status_t select_fault_stub(enum scdk_fault_user_test test,
+                                       const uint8_t **out_start,
+                                       const uint8_t **out_end) {
+    if (out_start == 0 || out_end == 0) {
+        return SCDK_ERR_INVAL;
+    }
+
+    switch (test) {
+    case SCDK_FAULT_TEST_PAGE_FAULT:
+        *out_start = scdk_user_page_fault_stub_start;
+        *out_end = scdk_user_page_fault_stub_end;
+        return SCDK_OK;
+    case SCDK_FAULT_TEST_INVALID_SYSCALL:
+        *out_start = scdk_user_invalid_syscall_stub_start;
+        *out_end = scdk_user_invalid_syscall_stub_end;
+        return SCDK_OK;
+    case SCDK_FAULT_TEST_BAD_POINTER:
+        *out_start = scdk_user_bad_pointer_stub_start;
+        *out_end = scdk_user_bad_pointer_stub_end;
+        return SCDK_OK;
+    default:
+        return SCDK_ERR_INVAL;
+    }
+}
+
+scdk_status_t scdk_usermode_run_fault_test(scdk_cap_t aspace,
+                                           scdk_cap_t thread,
+                                           enum scdk_fault_user_test test,
+                                           scdk_cap_t bootstrap_endpoint,
+                                           uint64_t hhdm_offset) {
+    struct scdk_syscall_task_state saved_syscall_state;
+    const uint8_t *stub_start = 0;
+    const uint8_t *stub_end = 0;
+    void *task_syscall_stack = 0;
+    uint64_t boot_root = 0;
+    uint64_t code_phys = 0;
+    uint64_t stack_phys = 0;
+    bool code_mapped = false;
+    bool stack_mapped = false;
+    bool boot_root_valid = false;
+    bool saved_syscall_state_valid = false;
+    bool user_faulted = false;
+    size_t stub_size;
+    scdk_status_t status;
+
+    if (aspace == 0 ||
+        thread == 0 ||
+        bootstrap_endpoint == 0 ||
+        hhdm_offset == 0u) {
+        return SCDK_ERR_INVAL;
+    }
+
+    status = select_fault_stub(test, &stub_start, &stub_end);
+    if (status != SCDK_OK) {
+        return status;
+    }
+
+    stub_size = (size_t)(stub_end - stub_start);
+    if (stub_size == 0u || stub_size > SCDK_PAGE_SIZE) {
+        return SCDK_ERR_BOUNDS;
+    }
+
+    status = scdk_cap_check(thread, SCDK_RIGHT_READ, SCDK_OBJ_THREAD, 0);
+    if (status != SCDK_OK) {
+        return status;
+    }
+
+    status = scdk_cap_check(bootstrap_endpoint, SCDK_RIGHT_SEND, SCDK_OBJ_ENDPOINT, 0);
+    if (status != SCDK_OK) {
+        return status;
+    }
+
+    scdk_syscall_save_task_state(&saved_syscall_state);
+    saved_syscall_state_valid = true;
+
+    status = scdk_vmm_current_root(&boot_root);
+    if (status != SCDK_OK) {
+        goto cleanup;
+    }
+    boot_root_valid = true;
+
+    task_syscall_stack = scdk_kalloc(SCDK_PAGE_SIZE);
+    if (task_syscall_stack == 0) {
+        status = SCDK_ERR_NOMEM;
+        goto cleanup;
+    }
+
+    status = scdk_usermode_init((uint64_t)(uintptr_t)task_syscall_stack + SCDK_PAGE_SIZE);
+    if (status != SCDK_OK) {
+        goto cleanup;
+    }
+
+    status = scdk_page_alloc(&code_phys);
+    if (status != SCDK_OK) {
+        goto cleanup;
+    }
+
+    memset((void *)(uintptr_t)(hhdm_offset + code_phys), 0, SCDK_PAGE_SIZE);
+    memcpy((void *)(uintptr_t)(hhdm_offset + code_phys), stub_start, stub_size);
+
+    status = scdk_address_space_map(aspace,
+                                    SCDK_USER_TEST_CODE_VIRT,
+                                    code_phys,
+                                    0);
+    if (status != SCDK_OK) {
+        goto cleanup;
+    }
+    code_mapped = true;
+
+    status = scdk_page_alloc(&stack_phys);
+    if (status != SCDK_OK) {
+        goto cleanup;
+    }
+
+    memset((void *)(uintptr_t)(hhdm_offset + stack_phys), 0, SCDK_PAGE_SIZE);
+    status = scdk_address_space_map(aspace,
+                                    SCDK_USER_TEST_STACK_TOP - SCDK_PAGE_SIZE,
+                                    stack_phys,
+                                    SCDK_VMM_MAP_WRITE);
+    if (status != SCDK_OK) {
+        goto cleanup;
+    }
+    stack_mapped = true;
+
+    status = scdk_address_space_activate(aspace);
+    if (status != SCDK_OK) {
+        goto cleanup;
+    }
+
+    scdk_enter_usermode_asm(SCDK_USER_TEST_CODE_VIRT,
+                            SCDK_USER_TEST_STACK_TOP,
+                            bootstrap_endpoint);
+    user_faulted = scdk_syscall_user_faulted();
+
+    status = scdk_vmm_activate_root(boot_root);
+    boot_root_valid = false;
+    if (status != SCDK_OK) {
+        goto cleanup;
+    }
+
+    status = user_faulted ? SCDK_OK : SCDK_ERR_BUSY;
+
+cleanup:
+    if (boot_root_valid) {
+        (void)scdk_vmm_activate_root(boot_root);
+    }
+
+    if (stack_mapped) {
+        (void)scdk_address_space_unmap(aspace,
+                                       SCDK_USER_TEST_STACK_TOP - SCDK_PAGE_SIZE);
+    }
+
+    if (code_mapped) {
+        (void)scdk_address_space_unmap(aspace, SCDK_USER_TEST_CODE_VIRT);
+    }
+
+    if (stack_phys != 0u) {
+        (void)scdk_page_free(stack_phys);
+    }
+
+    if (code_phys != 0u) {
+        (void)scdk_page_free(code_phys);
     }
 
     if (saved_syscall_state_valid) {

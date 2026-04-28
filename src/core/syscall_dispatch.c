@@ -5,6 +5,7 @@
 
 #include <stdint.h>
 
+#include <scdk/fault.h>
 #include <scdk/log.h>
 #include <scdk/scheduler.h>
 #include <scdk/task.h>
@@ -27,10 +28,14 @@ extern uint64_t scdk_user_return_rip;
 
 static bool user_exited;
 static bool endpoint_call_passed;
+static bool user_faulted;
+static scdk_status_t user_fault_status;
 
 void scdk_syscall_reset_task_state(void) {
     user_exited = false;
     endpoint_call_passed = false;
+    user_faulted = false;
+    user_fault_status = SCDK_OK;
     scdk_syscall_return_value = (uint64_t)SCDK_OK;
 }
 
@@ -52,6 +57,8 @@ void scdk_syscall_save_task_state(struct scdk_syscall_task_state *out_state) {
     out_state->user_return_rip = scdk_user_return_rip;
     out_state->user_exited = user_exited;
     out_state->endpoint_call_passed = endpoint_call_passed;
+    out_state->user_faulted = user_faulted;
+    out_state->user_fault_status = user_fault_status;
 }
 
 void scdk_syscall_restore_task_state(const struct scdk_syscall_task_state *state) {
@@ -72,6 +79,8 @@ void scdk_syscall_restore_task_state(const struct scdk_syscall_task_state *state
     scdk_user_return_rip = state->user_return_rip;
     user_exited = state->user_exited;
     endpoint_call_passed = state->endpoint_call_passed;
+    user_faulted = state->user_faulted;
+    user_fault_status = state->user_fault_status;
 }
 
 uint64_t scdk_syscall_dispatch(uint64_t number,
@@ -95,6 +104,9 @@ uint64_t scdk_syscall_dispatch(uint64_t number,
         break;
     case SCDK_SYS_ENDPOINT_CALL:
         status = scdk_sys_endpoint_call((scdk_cap_t)arg0, (uintptr_t)arg1);
+        if (scdk_syscall_user_faulted()) {
+            return 1u;
+        }
         if (status == SCDK_OK) {
             endpoint_call_passed = true;
         }
@@ -179,11 +191,7 @@ uint64_t scdk_syscall_dispatch(uint64_t number,
         return 0u;
     }
     default:
-        scdk_log_error("unsupported syscall %llu",
-                       (unsigned long long)number);
-        status = SCDK_ERR_NOTSUP;
-        user_exited = true;
-        scdk_syscall_return_value = (uint64_t)status;
+        scdk_fault_handle_invalid_syscall(number);
         return 1u;
     }
 
@@ -197,4 +205,19 @@ bool scdk_syscall_user_exited(void) {
 
 bool scdk_syscall_endpoint_call_passed(void) {
     return endpoint_call_passed;
+}
+
+void scdk_syscall_mark_user_fault(scdk_status_t status) {
+    user_faulted = true;
+    user_fault_status = status;
+    user_exited = true;
+    scdk_syscall_return_value = (uint64_t)status;
+}
+
+bool scdk_syscall_user_faulted(void) {
+    return user_faulted;
+}
+
+scdk_status_t scdk_syscall_user_fault_status(void) {
+    return user_fault_status;
 }

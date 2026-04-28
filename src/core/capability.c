@@ -43,7 +43,8 @@ static scdk_status_t validate_cap_slot(scdk_cap_t cap,
     if (index >= SCDK_MAX_CAPS ||
         generation == 0u ||
         cap_generations[index] != generation ||
-        cap_table[index].object_id == 0) {
+        cap_table[index].object_id == 0 ||
+        cap_table[index].revoked != 0u) {
         return SCDK_ERR_NOENT;
     }
 
@@ -67,7 +68,7 @@ scdk_status_t scdk_cap_create(scdk_object_id_t object_id,
     }
 
     for (uint32_t i = 0; i < SCDK_MAX_CAPS; i++) {
-        if (cap_table[i].object_id != 0) {
+        if (cap_table[i].object_id != 0 && cap_table[i].revoked == 0u) {
             continue;
         }
 
@@ -75,6 +76,7 @@ scdk_status_t scdk_cap_create(scdk_object_id_t object_id,
         cap_table[i].object_id = object->id;
         cap_table[i].generation = object->generation;
         cap_table[i].object_type = object->type;
+        cap_table[i].revoked = 0u;
         cap_table[i].rights = rights;
 
         *out_cap = cap_make_token(i, cap_gen);
@@ -147,5 +149,19 @@ scdk_status_t scdk_cap_revoke_stub(scdk_cap_t cap) {
         return status;
     }
 
-    return SCDK_ERR_NOTSUP;
+    return scdk_cap_revoke(cap);
+}
+
+scdk_status_t scdk_cap_revoke(scdk_cap_t cap) {
+    const struct scdk_cap_entry *entry = 0;
+    scdk_status_t status = scdk_cap_lookup(cap, &entry);
+
+    if (status != SCDK_OK) {
+        return status;
+    }
+
+    uint32_t index = cap_index(cap);
+    cap_table[index].revoked = 1u;
+    (void)next_cap_generation(index);
+    return SCDK_OK;
 }

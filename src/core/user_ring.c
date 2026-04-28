@@ -159,6 +159,14 @@ scdk_status_t scdk_user_ring_submit(scdk_cap_t source_task,
         return SCDK_ERR_BUSY;
     }
 
+    status = scdk_cap_check(slot->target_endpoint,
+                            SCDK_RIGHT_SEND,
+                            SCDK_OBJ_ENDPOINT,
+                            0);
+    if (status != SCDK_OK) {
+        return status;
+    }
+
     status = scdk_user_validate_range(user_descs,
                                       sizeof(struct scdk_ring_desc) * count,
                                       false);
@@ -220,6 +228,14 @@ scdk_status_t scdk_user_ring_poll(scdk_cap_t source_task,
 
     if (slot->target_endpoint == 0) {
         return SCDK_ERR_BUSY;
+    }
+
+    status = scdk_cap_check(slot->target_endpoint,
+                            SCDK_RIGHT_SEND,
+                            SCDK_OBJ_ENDPOINT,
+                            0);
+    if (status != SCDK_OK) {
+        return status;
     }
 
     status = scdk_user_validate_range(user_completions,

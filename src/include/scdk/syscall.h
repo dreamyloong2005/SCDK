@@ -24,6 +24,8 @@ struct scdk_syscall_task_state {
     uint64_t user_return_rip;
     bool user_exited;
     bool endpoint_call_passed;
+    bool user_faulted;
+    scdk_status_t user_fault_status;
 };
 
 /*
@@ -75,5 +77,21 @@ bool scdk_syscall_user_exited(void);
  * endpoint-call syscall successfully.
  */
 bool scdk_syscall_endpoint_call_passed(void);
+
+/*
+ * Fault-path helper: mark the current user-mode run as faulted so the
+ * assembly return path unwinds to the saved kernel frame.
+ */
+void scdk_syscall_mark_user_fault(scdk_status_t status);
+
+/*
+ * Fault-path diagnostic: report whether the current user-mode run faulted.
+ */
+bool scdk_syscall_user_faulted(void);
+
+/*
+ * Fault-path diagnostic: status associated with the last user fault.
+ */
+scdk_status_t scdk_syscall_user_fault_status(void);
 
 #endif

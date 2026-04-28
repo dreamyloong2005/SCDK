@@ -9,6 +9,7 @@
 
 #include <scdk/address_space.h>
 #include <scdk/endpoint.h>
+#include <scdk/fault.h>
 #include <scdk/message.h>
 #include <scdk/mm.h>
 #include <scdk/service.h>
@@ -180,11 +181,13 @@ scdk_status_t scdk_sys_endpoint_call(scdk_cap_t endpoint_cap,
                             SCDK_OBJ_ENDPOINT,
                             0);
     if (status != SCDK_OK) {
+        scdk_fault_handle_capability_failure(status);
         return status;
     }
 
     status = scdk_user_copy_from(user_message_ptr, &msg, sizeof(msg));
     if (status != SCDK_OK) {
+        scdk_fault_handle_bad_user_pointer(user_message_ptr, status);
         return status;
     }
 
@@ -192,6 +195,7 @@ scdk_status_t scdk_sys_endpoint_call(scdk_cap_t endpoint_cap,
     if (status != SCDK_OK) {
         msg.status = (uint64_t)status;
         (void)scdk_user_copy_to(user_message_ptr, &msg, sizeof(msg));
+        scdk_fault_handle_capability_failure(status);
         return status;
     }
 
@@ -202,10 +206,20 @@ scdk_status_t scdk_sys_endpoint_call(scdk_cap_t endpoint_cap,
         if (status != SCDK_OK) {
             msg.status = (uint64_t)status;
             (void)scdk_user_copy_to(user_message_ptr, &msg, sizeof(msg));
+            if (status == SCDK_ERR_BOUNDS ||
+                status == SCDK_ERR_NOENT ||
+                status == SCDK_ERR_PERM) {
+                scdk_fault_handle_bad_user_pointer((uintptr_t)msg.arg0, status);
+            }
             return status;
         }
         break;
     case SCDK_MSG_READ:
+    case SCDK_MSG_CONSOLE_WRITE:
+    case SCDK_MSG_CONSOLE_CLEAR:
+    case SCDK_MSG_CONSOLE_GET_INFO:
+    case SCDK_MSG_TTY_POLL_EVENT:
+    case SCDK_MSG_TTY_GET_INFO:
         break;
     default:
         msg.status = (uint64_t)SCDK_ERR_NOTSUP;

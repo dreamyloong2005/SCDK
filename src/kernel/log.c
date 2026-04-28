@@ -7,11 +7,12 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#include <scdk/console.h>
 #include <scdk/endpoint.h>
 #include <scdk/message.h>
-#include <scdk/serial.h>
 
 #define SCDK_LOG_BUFFER_SIZE 512u
+#define SCDK_LOG_TRACE_SIZE 8192u
 
 struct scdk_log_buffer {
     char data[SCDK_LOG_BUFFER_SIZE];
@@ -20,9 +21,26 @@ struct scdk_log_buffer {
 
 static scdk_cap_t log_console_endpoint;
 static bool log_dispatching;
+static char log_trace[SCDK_LOG_TRACE_SIZE];
+static size_t log_trace_head;
+static size_t log_trace_len;
 
-static void serial_write_string(const char *s) {
-    scdk_serial_write_string(s);
+static void trace_append_char(char c) {
+    log_trace[log_trace_head] = c;
+    log_trace_head = (log_trace_head + 1u) % sizeof(log_trace);
+    if (log_trace_len < sizeof(log_trace)) {
+        log_trace_len++;
+    }
+}
+
+static void trace_append(const char *s, size_t len) {
+    if (s == 0) {
+        return;
+    }
+
+    for (size_t i = 0; i < len; i++) {
+        trace_append_char(s[i]);
+    }
 }
 
 static void append_char(struct scdk_log_buffer *buffer, char c) {
@@ -161,8 +179,8 @@ static void append_format(struct scdk_log_buffer *buffer,
     }
 }
 
-static void write_serial_line(const char *s) {
-    serial_write_string(s);
+static void write_backend_line(const char *s) {
+    (void)scdk_console_backend_write(s, 0);
 }
 
 static scdk_status_t write_console_line(const char *s, size_t len) {
@@ -170,7 +188,7 @@ static scdk_status_t write_console_line(const char *s, size_t len) {
     scdk_status_t status;
 
     if (log_console_endpoint == 0 || log_dispatching) {
-        write_serial_line(s);
+        write_backend_line(s);
         return SCDK_OK;
     }
 
@@ -199,6 +217,28 @@ scdk_status_t scdk_log_set_console_endpoint(scdk_cap_t endpoint) {
     return SCDK_OK;
 }
 
+size_t scdk_log_trace_copy(char *dst, size_t capacity) {
+    size_t copied = 0;
+    size_t start;
+
+    if (dst == 0 || capacity == 0u) {
+        return log_trace_len;
+    }
+
+    start = (log_trace_head + sizeof(log_trace) - log_trace_len) % sizeof(log_trace);
+    while (copied + 1u < capacity && copied < log_trace_len) {
+        dst[copied] = log_trace[(start + copied) % sizeof(log_trace)];
+        copied++;
+    }
+
+    dst[copied] = '\0';
+    return copied;
+}
+
+size_t scdk_log_trace_size(void) {
+    return log_trace_len;
+}
+
 void scdk_log_vwrite(const char *level, const char *fmt, va_list args) {
     struct scdk_log_buffer buffer = { 0 };
 
@@ -215,9 +255,10 @@ void scdk_log_vwrite(const char *level, const char *fmt, va_list args) {
     append_string(&buffer, "] ");
     append_format(&buffer, fmt, args);
     append_string(&buffer, "\n");
+    trace_append(buffer.data, buffer.len);
 
     if (write_console_line(buffer.data, buffer.len) != SCDK_OK) {
-        write_serial_line(buffer.data);
+        write_backend_line(buffer.data);
     }
 }
 

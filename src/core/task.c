@@ -10,6 +10,7 @@
 #include <scdk/address_space.h>
 #include <scdk/capability.h>
 #include <scdk/log.h>
+#include <scdk/service.h>
 #include <scdk/thread.h>
 #include <scdk/usermode.h>
 
@@ -314,6 +315,60 @@ scdk_status_t scdk_user_task_run_flat(scdk_cap_t task,
     return scdk_task_exit(task, 0);
 }
 
+scdk_status_t scdk_user_task_run_fault_test(scdk_cap_t task,
+                                            enum scdk_fault_user_test test,
+                                            uint64_t hhdm_offset) {
+    struct scdk_user_task_slot *task_slot = 0;
+    struct scdk_user_thread_slot *thread_slot = 0;
+    scdk_cap_t bootstrap_endpoint = 0;
+    scdk_cap_t old_user_task;
+    scdk_status_t status;
+
+    status = task_slot_for_cap(task, &task_slot);
+    if (status != SCDK_OK) {
+        return status;
+    }
+
+    status = thread_slot_for_cap(task_slot->main_thread_cap, &thread_slot);
+    if (status != SCDK_OK) {
+        return status;
+    }
+
+    if (task_slot->state != SCDK_TASK_NEW ||
+        thread_slot->state != SCDK_THREAD_NEW) {
+        return SCDK_ERR_BUSY;
+    }
+
+    status = scdk_service_lookup(SCDK_SERVICE_CONSOLE, &bootstrap_endpoint);
+    if (status != SCDK_OK) {
+        return status;
+    }
+
+    task_slot->state = SCDK_TASK_RUNNING;
+    thread_slot->state = SCDK_THREAD_RUNNING;
+    scdk_log_write("task", "main thread started");
+
+    old_user_task = current_user_task;
+    current_user_task = task;
+    status = scdk_usermode_run_fault_test(task_slot->address_space_cap,
+                                          thread_slot->thread_cap,
+                                          test,
+                                          bootstrap_endpoint,
+                                          hhdm_offset);
+    current_user_task = old_user_task;
+    if (status != SCDK_OK) {
+        task_slot->state = SCDK_TASK_DEAD;
+        thread_slot->state = SCDK_THREAD_DEAD;
+        return status;
+    }
+
+    if (task_slot->state != SCDK_TASK_DEAD) {
+        return SCDK_ERR_BUSY;
+    }
+
+    return SCDK_OK;
+}
+
 scdk_status_t scdk_task_exit(scdk_cap_t task,
                              int status_code) {
     struct scdk_user_task_slot *task_slot = 0;
@@ -336,6 +391,31 @@ scdk_status_t scdk_task_exit(scdk_cap_t task,
     }
 
     scdk_log_write("task", "user task exited");
+    return SCDK_OK;
+}
+
+scdk_status_t scdk_task_fault_current(int status_code) {
+    struct scdk_user_task_slot *task_slot = 0;
+    struct scdk_user_thread_slot *thread_slot = 0;
+    scdk_status_t status;
+
+    if (current_user_task == 0) {
+        return SCDK_ERR_NOENT;
+    }
+
+    status = task_slot_for_cap(current_user_task, &task_slot);
+    if (status != SCDK_OK) {
+        return status;
+    }
+
+    task_slot->exit_status = status_code;
+    task_slot->state = SCDK_TASK_DEAD;
+
+    if (thread_slot_for_cap(task_slot->main_thread_cap, &thread_slot) == SCDK_OK) {
+        thread_slot->state = SCDK_THREAD_DEAD;
+    }
+
+    scdk_log_write("fault", "task killed");
     return SCDK_OK;
 }
 

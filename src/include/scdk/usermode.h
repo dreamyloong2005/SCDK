@@ -8,6 +8,7 @@
 #include <stdint.h>
 
 #include <scdk/capability.h>
+#include <scdk/fault.h>
 #include <scdk/types.h>
 
 #define SCDK_USER_TEST_CODE_VIRT 0x0000000000400000ull
@@ -42,6 +43,16 @@ scdk_status_t scdk_usermode_run_flat_image(scdk_cap_t aspace,
                                            uintptr_t entry,
                                            const void *image,
                                            size_t image_size,
+                                           scdk_cap_t bootstrap_endpoint,
+                                           uint64_t hhdm_offset);
+
+/*
+ * Fault-path test helper: run a built-in user stub that intentionally triggers
+ * one M27 user-fault path.
+ */
+scdk_status_t scdk_usermode_run_fault_test(scdk_cap_t aspace,
+                                           scdk_cap_t thread,
+                                           enum scdk_fault_user_test test,
                                            scdk_cap_t bootstrap_endpoint,
                                            uint64_t hhdm_offset);
 

@@ -1,17 +1,15 @@
 // SPDX-License-Identifier: MPL-2.0
 // Copyright (c) 2026 The Scadek OS Project contributors
 
-#include <scdk/console_service.h>
+#include <scdk/console.h>
 
-#include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
 
 #include <scdk/endpoint.h>
-#include <scdk/framebuffer.h>
+#include <scdk/log.h>
 #include <scdk/message.h>
 #include <scdk/ring.h>
-#include <scdk/serial.h>
 #include <scdk/service.h>
 #include <scdk/string.h>
 #include <scdk/user_grant.h>
@@ -21,7 +19,6 @@
 static scdk_status_t console_handle_write(struct scdk_message *msg) {
     const char *buffer = (const char *)(uintptr_t)msg->arg0;
     size_t length = (size_t)msg->arg1;
-    bool needs_newline;
 
     if (buffer == 0) {
         return SCDK_ERR_INVAL;
@@ -31,21 +28,54 @@ static scdk_status_t console_handle_write(struct scdk_message *msg) {
         length = strlen(buffer);
     }
 
-    needs_newline = length == 0u || buffer[length - 1u] != '\n';
+    return scdk_console_backend_write(buffer, length);
+}
 
-    for (size_t i = 0; i < length; i++) {
-        scdk_serial_write_char(buffer[i]);
+static scdk_status_t console_handle_grant_write(scdk_cap_t endpoint,
+                                                struct scdk_message *msg) {
+    char buffer[SCDK_CONSOLE_RING_MAX_WRITE + 1u];
+    uint64_t length;
+    scdk_status_t status;
+
+    if (msg == 0 || msg->arg0 == 0u) {
+        return SCDK_ERR_INVAL;
     }
 
-    if (needs_newline) {
-        scdk_serial_write_char('\n');
+    length = msg->arg2;
+    if (length == 0u || length > SCDK_CONSOLE_RING_MAX_WRITE) {
+        return SCDK_ERR_BOUNDS;
     }
 
-    scdk_framebuffer_console_write(buffer, length);
-    if (needs_newline) {
-        scdk_framebuffer_console_write("\n", 1u);
+    status = scdk_user_grant_copy_from(endpoint,
+                                      (scdk_cap_t)msg->arg0,
+                                      msg->arg1,
+                                      buffer,
+                                      length);
+    if (status != SCDK_OK) {
+        return status;
     }
 
+    buffer[length] = '\0';
+    return scdk_console_backend_write(buffer, (size_t)length);
+}
+
+static scdk_status_t console_handle_get_info(struct scdk_message *msg) {
+    struct scdk_console_info info;
+    scdk_status_t status;
+
+    if (msg == 0) {
+        return SCDK_ERR_INVAL;
+    }
+
+    status = scdk_console_backend_get_info(&info);
+    if (status != SCDK_OK) {
+        return status;
+    }
+
+    msg->arg0 = info.columns;
+    msg->arg1 = info.rows;
+    msg->arg2 = ((uint64_t)info.cursor_x << 32u) | info.cursor_y;
+    msg->arg3 = info.flags;
     return SCDK_OK;
 }
 
@@ -140,6 +170,14 @@ static scdk_status_t console_endpoint_handler(scdk_cap_t endpoint,
     switch (msg->type) {
     case SCDK_MSG_WRITE:
         return console_handle_write(msg);
+    case SCDK_MSG_CONSOLE_WRITE:
+        return console_handle_grant_write(endpoint, msg);
+    case SCDK_MSG_CONSOLE_CLEAR:
+        return scdk_console_backend_clear();
+    case SCDK_MSG_CONSOLE_GET_INFO:
+        return console_handle_get_info(msg);
+    case SCDK_MSG_CONSOLE_BIND_OUTPUT_RING:
+        return SCDK_ERR_NOTSUP;
     case SCDK_MSG_RING_PROCESS:
         return console_handle_ring_process(endpoint, msg);
     default:
@@ -150,9 +188,23 @@ static scdk_status_t console_endpoint_handler(scdk_cap_t endpoint,
 scdk_status_t scdk_console_service_init(scdk_cap_t *out_endpoint) {
     scdk_cap_t endpoint = 0;
     scdk_status_t status;
+    struct scdk_console_info info;
 
     if (out_endpoint == 0) {
         return SCDK_ERR_INVAL;
+    }
+
+    status = scdk_console_backend_init();
+    if (status != SCDK_OK) {
+        return status;
+    }
+    scdk_log_write("console", "backend init ok");
+    scdk_log_write("console", "framebuffer text backend ok");
+    if (scdk_console_backend_get_info(&info) == SCDK_OK &&
+        (info.flags & SCDK_CONSOLE_INFO_SERIAL_MIRROR) != 0u) {
+        scdk_log_write("console", "serial mirror backend ok");
+    } else {
+        scdk_log_write("console", "serial mirror backend unavailable");
     }
 
     status = scdk_endpoint_create(SCDK_BOOT_CORE,
@@ -169,5 +221,7 @@ scdk_status_t scdk_console_service_init(scdk_cap_t *out_endpoint) {
     }
 
     *out_endpoint = endpoint;
+    scdk_log_write("console", "frontend ready");
+    scdk_log_write("console", "service endpoint registered");
     return SCDK_OK;
 }

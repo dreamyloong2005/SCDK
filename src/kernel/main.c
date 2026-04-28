@@ -6,12 +6,13 @@
 #include <stdbool.h>
 #include <stdint.h>
 
+#include <scdk/console_backend.h>
+#include <scdk/early_console.h>
 #include <scdk/framebuffer.h>
 #include <scdk/initrd.h>
 #include <scdk/log.h>
 #include <scdk/panic.h>
 #include <scdk/selftest.h>
-#include <scdk/serial.h>
 
 #ifndef SCDK_VERSION
 #define SCDK_VERSION "0.0.0-unknown"
@@ -117,6 +118,8 @@ static void init_framebuffer(void) {
     }
 
     scdk_framebuffer_draw_test_pattern();
+    scdk_early_console_framebuffer_ready();
+    (void)scdk_console_backend_write("SCDK framebuffer boot console ready", 0);
     scdk_log_write("boot", "framebuffer ok");
 }
 
@@ -127,17 +130,18 @@ __attribute__((noreturn)) static void idle_forever(void) {
 }
 
 void kmain(void) {
-    bool serial_ok = scdk_serial_init();
+    bool serial_ok = scdk_early_console_init();
     uint64_t hhdm_offset = 0;
     scdk_status_t status;
 
     scdk_log_write("boot", "SCDK kernel entered");
     if (!serial_ok) {
-        scdk_panic("boot serial init failed");
+        scdk_log_write("console", "serial debug sink unavailable");
+    } else {
+        scdk_log_write("console", "serial debug sink enabled");
     }
 
     scdk_log_write("boot", "SCDK %s", SCDK_VERSION);
-    scdk_log_write("boot", "serial ok");
     scdk_log_info("log subsystem ok");
 
     if (!LIMINE_BASE_REVISION_SUPPORTED(limine_base_revision)) {
@@ -159,6 +163,6 @@ void kmain(void) {
         scdk_panic("core self-tests failed: %lld", (long long)status);
     }
 
-    scdk_log_write("boot", "milestone 24 complete");
+    scdk_log_write("boot", "milestone 30 complete");
     idle_forever();
 }
