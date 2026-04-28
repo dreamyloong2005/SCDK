@@ -71,6 +71,18 @@ static const struct key_map_entry scancode_set1[128] = {
     [0x34] = { '.', '.', '>' },
     [0x35] = { '/', '/', '?' },
     [0x39] = { ' ', ' ', ' ' },
+    [0x3a] = { SCDK_KEY_CAPS_LOCK, 0, 0 },
+};
+
+static const struct key_map_entry extended_scancode_set1[128] = {
+    [0x47] = { SCDK_KEY_HOME, 0, 0 },
+    [0x48] = { SCDK_KEY_UP, 0, 0 },
+    [0x49] = { SCDK_KEY_PAGE_UP, 0, 0 },
+    [0x4b] = { SCDK_KEY_LEFT, 0, 0 },
+    [0x4d] = { SCDK_KEY_RIGHT, 0, 0 },
+    [0x4f] = { SCDK_KEY_END, 0, 0 },
+    [0x50] = { SCDK_KEY_DOWN, 0, 0 },
+    [0x51] = { SCDK_KEY_PAGE_DOWN, 0, 0 },
 };
 
 static struct scdk_input_event queue[KEY_QUEUE_SIZE];
@@ -79,7 +91,49 @@ static uint32_t queue_tail;
 static uint32_t queue_count;
 static uint64_t event_clock;
 static bool keyboard_initialized;
-static bool shift_down;
+static bool left_shift_down;
+static bool right_shift_down;
+static bool caps_lock_on;
+static bool extended_scancode_pending;
+
+static bool is_alpha_entry(const struct key_map_entry *entry) {
+    return entry != 0 &&
+           entry->normal >= 'a' &&
+           entry->normal <= 'z' &&
+           entry->shifted >= 'A' &&
+           entry->shifted <= 'Z';
+}
+
+static bool shift_down(void) {
+    return left_shift_down || right_shift_down;
+}
+
+static uint32_t current_modifiers(void) {
+    uint32_t modifiers = 0;
+
+    if (shift_down()) {
+        modifiers |= SCDK_INPUT_MOD_SHIFT;
+    }
+    if (caps_lock_on) {
+        modifiers |= SCDK_INPUT_MOD_CAPS_LOCK;
+    }
+
+    return modifiers;
+}
+
+static uint32_t ascii_for_entry(const struct key_map_entry *entry) {
+    bool shift = shift_down();
+
+    if (entry == 0) {
+        return 0;
+    }
+
+    if (is_alpha_entry(entry)) {
+        return (uint32_t)(uint8_t)((shift != caps_lock_on) ? entry->shifted : entry->normal);
+    }
+
+    return (uint32_t)(uint8_t)(shift ? entry->shifted : entry->normal);
+}
 
 static inline uint8_t inb(uint16_t port) {
     uint8_t value;
@@ -119,12 +173,28 @@ static scdk_status_t dequeue_event(struct scdk_input_event *out) {
 
 static scdk_status_t handle_scancode(uint8_t scancode) {
     struct scdk_input_event event = { 0 };
-    bool released = (scancode & 0x80u) != 0u;
-    uint8_t code = scancode & 0x7fu;
+    bool extended;
+    bool released;
+    uint8_t code;
     const struct key_map_entry *entry;
 
-    if (code == 0x2au || code == 0x36u) {
-        shift_down = !released;
+    if (scancode == 0xe0u) {
+        extended_scancode_pending = true;
+        return SCDK_ERR_NOENT;
+    }
+
+    extended = extended_scancode_pending;
+    extended_scancode_pending = false;
+    released = (scancode & 0x80u) != 0u;
+    code = scancode & 0x7fu;
+
+    if (!extended && code == 0x2au) {
+        left_shift_down = !released;
+        return SCDK_ERR_NOENT;
+    }
+
+    if (!extended && code == 0x36u) {
+        right_shift_down = !released;
         return SCDK_ERR_NOENT;
     }
 
@@ -132,16 +202,20 @@ static scdk_status_t handle_scancode(uint8_t scancode) {
         return SCDK_ERR_NOENT;
     }
 
-    entry = &scancode_set1[code];
+    entry = extended ? &extended_scancode_set1[code] : &scancode_set1[code];
     if (entry->keycode == 0u) {
         return SCDK_ERR_NOENT;
+    }
+
+    if (entry->keycode == SCDK_KEY_CAPS_LOCK && !released) {
+        caps_lock_on = !caps_lock_on;
     }
 
     event.timestamp = ++event_clock;
     event.type = released ? SCDK_INPUT_KEY_UP : SCDK_INPUT_KEY_DOWN;
     event.keycode = entry->keycode;
-    event.ascii = released ? 0u : (uint32_t)(uint8_t)(shift_down ? entry->shifted : entry->normal);
-    event.modifiers = shift_down ? SCDK_INPUT_MOD_SHIFT : 0u;
+    event.ascii = released ? 0u : ascii_for_entry(entry);
+    event.modifiers = current_modifiers();
     event.flags = 0;
     return enqueue_event(&event);
 }
@@ -151,7 +225,10 @@ scdk_status_t scdk_keyboard_init(void) {
     queue_tail = 0;
     queue_count = 0;
     event_clock = 0;
-    shift_down = false;
+    left_shift_down = false;
+    right_shift_down = false;
+    caps_lock_on = false;
+    extended_scancode_pending = false;
     keyboard_initialized = true;
     return SCDK_OK;
 }

@@ -39,6 +39,12 @@ scdk_status_t scdk_console_backend_write(const char *buffer,
 scdk_status_t scdk_console_backend_clear(void);
 
 /*
+ * Backend control-plane: move the visible framebuffer text viewport.
+ * Negative lines scroll toward older output, positive lines scroll back down.
+ */
+scdk_status_t scdk_console_backend_scroll(int32_t lines);
+
+/*
  * Backend diagnostic: return framebuffer text geometry and mirror flags.
  */
 scdk_status_t scdk_console_backend_get_info(struct scdk_console_info *out);

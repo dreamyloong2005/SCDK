@@ -63,6 +63,19 @@ scdk_status_t scdk_console_backend_clear(void) {
     return scdk_fb_text_clear();
 }
 
+scdk_status_t scdk_console_backend_scroll(int32_t lines) {
+    scdk_status_t status;
+
+    if (!console_backend_initialized) {
+        status = scdk_console_backend_init();
+        if (status != SCDK_OK) {
+            return status;
+        }
+    }
+
+    return scdk_fb_text_scroll(lines);
+}
+
 scdk_status_t scdk_console_backend_get_info(struct scdk_console_info *out) {
     scdk_status_t status;
 

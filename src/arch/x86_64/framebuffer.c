@@ -14,6 +14,15 @@ static uint64_t console_cursor_x;
 static uint64_t console_cursor_y;
 static bool console_cursor_ready;
 
+#define CONSOLE_HISTORY_ROWS 256u
+#define CONSOLE_MAX_COLUMNS 160u
+#define CONSOLE_VERTICAL_MARGIN_MIN 8u
+
+static char console_history[CONSOLE_HISTORY_ROWS][CONSOLE_MAX_COLUMNS];
+static uint64_t console_cursor_column;
+static uint64_t console_current_line;
+static uint64_t console_view_top_line;
+
 static uint32_t pack_rgb(uint8_t r, uint8_t g, uint8_t b) {
     if (active_framebuffer == 0) {
         return 0;
@@ -79,6 +88,35 @@ static const uint8_t glyph_letters[26][7] = {
     { 0x1f, 0x01, 0x02, 0x04, 0x08, 0x10, 0x1f },
 };
 
+static const uint8_t glyph_lowercase[26][7] = {
+    { 0x00, 0x00, 0x0e, 0x01, 0x0f, 0x11, 0x0f },
+    { 0x10, 0x10, 0x1e, 0x11, 0x11, 0x11, 0x1e },
+    { 0x00, 0x00, 0x0e, 0x10, 0x10, 0x10, 0x0e },
+    { 0x01, 0x01, 0x0f, 0x11, 0x11, 0x11, 0x0f },
+    { 0x00, 0x00, 0x0e, 0x11, 0x1f, 0x10, 0x0e },
+    { 0x06, 0x08, 0x08, 0x1c, 0x08, 0x08, 0x08 },
+    { 0x00, 0x00, 0x0f, 0x11, 0x11, 0x0f, 0x01 },
+    { 0x10, 0x10, 0x1e, 0x11, 0x11, 0x11, 0x11 },
+    { 0x04, 0x00, 0x0c, 0x04, 0x04, 0x04, 0x0e },
+    { 0x02, 0x00, 0x06, 0x02, 0x02, 0x12, 0x0c },
+    { 0x10, 0x10, 0x12, 0x14, 0x18, 0x14, 0x12 },
+    { 0x0c, 0x04, 0x04, 0x04, 0x04, 0x04, 0x0e },
+    { 0x00, 0x00, 0x1a, 0x15, 0x15, 0x11, 0x11 },
+    { 0x00, 0x00, 0x1e, 0x11, 0x11, 0x11, 0x11 },
+    { 0x00, 0x00, 0x0e, 0x11, 0x11, 0x11, 0x0e },
+    { 0x00, 0x00, 0x1e, 0x11, 0x11, 0x1e, 0x10 },
+    { 0x00, 0x00, 0x0f, 0x11, 0x11, 0x0f, 0x01 },
+    { 0x00, 0x00, 0x16, 0x19, 0x10, 0x10, 0x10 },
+    { 0x00, 0x00, 0x0f, 0x10, 0x0e, 0x01, 0x1e },
+    { 0x08, 0x08, 0x1c, 0x08, 0x08, 0x09, 0x06 },
+    { 0x00, 0x00, 0x11, 0x11, 0x11, 0x13, 0x0d },
+    { 0x00, 0x00, 0x11, 0x11, 0x0a, 0x0a, 0x04 },
+    { 0x00, 0x00, 0x11, 0x11, 0x15, 0x15, 0x0a },
+    { 0x00, 0x00, 0x11, 0x0a, 0x04, 0x0a, 0x11 },
+    { 0x00, 0x00, 0x11, 0x11, 0x0f, 0x01, 0x0e },
+    { 0x00, 0x00, 0x1f, 0x02, 0x04, 0x08, 0x1f },
+};
+
 static const uint8_t glyph_digits[10][7] = {
     { 0x0e, 0x11, 0x13, 0x15, 0x19, 0x11, 0x0e },
     { 0x04, 0x0c, 0x04, 0x04, 0x04, 0x04, 0x0e },
@@ -126,7 +164,7 @@ static const uint8_t glyph_underscore[7] = {
 
 static const uint8_t *glyph_for(char c) {
     if (c >= 'a' && c <= 'z') {
-        c = (char)(c - 'a' + 'A');
+        return glyph_lowercase[(uint32_t)(c - 'a')];
     }
 
     if (c >= 'A' && c <= 'Z') {
@@ -182,17 +220,26 @@ static uint64_t console_origin_x(void) {
 }
 
 static uint64_t console_origin_y(void) {
+    uint64_t line_step = console_cell_height() + 2u;
+    uint64_t rows;
+    uint64_t used;
+
     if (active_framebuffer == 0) {
         return 0;
     }
 
-    uint64_t origin = active_framebuffer->height / 12u + 12u;
-
-    if (origin + console_cell_height() >= active_framebuffer->height) {
+    if (active_framebuffer->height <=
+        console_cell_height() + CONSOLE_VERTICAL_MARGIN_MIN * 2u) {
         return 4u;
     }
 
-    return origin;
+    rows = (active_framebuffer->height - CONSOLE_VERTICAL_MARGIN_MIN * 2u) / line_step;
+    if (rows == 0u) {
+        return 4u;
+    }
+
+    used = rows * line_step;
+    return (active_framebuffer->height - used) / 2u;
 }
 
 static uint64_t console_line_step(void) {
@@ -209,6 +256,16 @@ static uint64_t console_columns(void) {
     }
 
     return (active_framebuffer->width - origin) / console_cell_width();
+}
+
+static uint64_t console_visible_columns(void) {
+    uint64_t columns = console_columns();
+
+    if (columns > CONSOLE_MAX_COLUMNS) {
+        return CONSOLE_MAX_COLUMNS;
+    }
+
+    return columns;
 }
 
 static uint64_t console_rows(void) {
@@ -269,18 +326,17 @@ static void draw_console_char(char c, uint64_t x, uint64_t y) {
     }
 }
 
-static void scroll_console(void) {
+static void scroll_console_pixels_up(void) {
     uint64_t origin_x = console_origin_x();
     uint64_t origin_y = console_origin_y();
     uint64_t line_step = console_line_step();
-    uint64_t bottom_y;
+    uint64_t bottom_y = origin_y + console_rows() * line_step;
     uint32_t background = pack_rgb(8u, 13u, 18u);
 
     if (active_framebuffer == 0 || line_step == 0u) {
         return;
     }
 
-    bottom_y = active_framebuffer->height;
     if (bottom_y <= origin_y + line_step) {
         return;
     }
@@ -300,32 +356,187 @@ static void scroll_console(void) {
               background);
 }
 
-static void console_newline(void) {
-    uint64_t line_step = console_line_step();
+static void clear_history_row(uint64_t line) {
+    char *row = console_history[line % CONSOLE_HISTORY_ROWS];
 
-    console_cursor_x = console_origin_x();
-    console_cursor_y += line_step;
-
-    if (active_framebuffer != 0 &&
-        console_cursor_y + console_cell_height() >= active_framebuffer->height) {
-        scroll_console();
-        console_cursor_y = active_framebuffer->height - line_step;
+    for (uint64_t col = 0; col < CONSOLE_MAX_COLUMNS; col++) {
+        row[col] = ' ';
     }
 }
 
-static void console_carriage_return(void) {
-    console_cursor_x = console_origin_x();
+static uint64_t oldest_history_line(void) {
+    if (console_current_line + 1u > CONSOLE_HISTORY_ROWS) {
+        return console_current_line + 1u - CONSOLE_HISTORY_ROWS;
+    }
+
+    return 0;
 }
 
-static void console_backspace(void) {
-    uint64_t origin = console_origin_x();
+static uint64_t bottom_view_top_line(void) {
+    uint64_t rows = console_rows();
 
-    if (console_cursor_x <= origin) {
+    if (rows == 0u || console_current_line + 1u <= rows) {
+        return 0;
+    }
+
+    return console_current_line + 1u - rows;
+}
+
+static bool view_is_at_bottom(void) {
+    return console_view_top_line >= bottom_view_top_line();
+}
+
+static void clamp_console_view(void) {
+    uint64_t oldest = oldest_history_line();
+    uint64_t bottom = bottom_view_top_line();
+
+    if (console_view_top_line < oldest) {
+        console_view_top_line = oldest;
+    }
+
+    if (console_view_top_line > bottom) {
+        console_view_top_line = bottom;
+    }
+}
+
+static bool history_line_visible(uint64_t line, uint64_t *out_row) {
+    uint64_t rows = console_rows();
+
+    if (line < console_view_top_line ||
+        line >= console_view_top_line + rows) {
+        return false;
+    }
+
+    if (out_row != 0) {
+        *out_row = line - console_view_top_line;
+    }
+
+    return true;
+}
+
+static char history_char_at(uint64_t line, uint64_t column) {
+    if (column >= CONSOLE_MAX_COLUMNS ||
+        line < oldest_history_line() ||
+        line > console_current_line) {
+        return ' ';
+    }
+
+    return console_history[line % CONSOLE_HISTORY_ROWS][column];
+}
+
+static void update_console_cursor_pixels(void) {
+    uint64_t row = 0;
+    uint64_t columns = console_visible_columns();
+
+    if (columns != 0u && console_cursor_column > columns) {
+        console_cursor_column = columns;
+    }
+
+    (void)history_line_visible(console_current_line, &row);
+    console_cursor_x = console_origin_x() + console_cursor_column * console_cell_width();
+    console_cursor_y = console_origin_y() + row * console_line_step();
+}
+
+static void draw_history_cell(uint64_t line, uint64_t column) {
+    uint64_t row = 0;
+    char ch;
+
+    if (!history_line_visible(line, &row) ||
+        column >= console_visible_columns()) {
         return;
     }
 
-    console_cursor_x -= console_cell_width();
-    clear_console_cell(console_cursor_x, console_cursor_y);
+    ch = history_char_at(line, column);
+    if (ch == ' ') {
+        clear_console_cell(console_origin_x() + column * console_cell_width(),
+                           console_origin_y() + row * console_line_step());
+        return;
+    }
+
+    draw_console_char(ch,
+                      console_origin_x() + column * console_cell_width(),
+                      console_origin_y() + row * console_line_step());
+}
+
+static void render_console(void) {
+    uint64_t origin_x = console_origin_x();
+    uint64_t origin_y = console_origin_y();
+    uint64_t rows = console_rows();
+    uint64_t columns = console_visible_columns();
+    uint64_t height;
+    uint32_t background = pack_rgb(8u, 13u, 18u);
+
+    if (active_framebuffer == 0 || active_framebuffer->bpp != 32) {
+        return;
+    }
+
+    if (active_framebuffer->height <= origin_y ||
+        active_framebuffer->width <= origin_x) {
+        return;
+    }
+
+    clamp_console_view();
+    height = active_framebuffer->height - origin_y;
+    fill_rect(origin_x, origin_y, active_framebuffer->width - origin_x, height, background);
+
+    for (uint64_t row = 0; row < rows; row++) {
+        uint64_t line = console_view_top_line + row;
+
+        for (uint64_t column = 0; column < columns; column++) {
+            char ch = history_char_at(line, column);
+
+            if (ch != ' ') {
+                draw_console_char(ch,
+                                  origin_x + column * console_cell_width(),
+                                  origin_y + row * console_line_step());
+            }
+        }
+    }
+
+    update_console_cursor_pixels();
+}
+
+static void console_newline(void) {
+    bool follow = view_is_at_bottom();
+    uint64_t old_top = console_view_top_line;
+
+    console_current_line++;
+    console_cursor_column = 0;
+    clear_history_row(console_current_line);
+
+    if (follow) {
+        console_view_top_line = bottom_view_top_line();
+    }
+
+    clamp_console_view();
+    if (follow && console_view_top_line == old_top + 1u) {
+        scroll_console_pixels_up();
+        update_console_cursor_pixels();
+        return;
+    }
+
+    if (console_view_top_line != old_top) {
+        render_console();
+        return;
+    }
+
+    update_console_cursor_pixels();
+}
+
+static void console_carriage_return(void) {
+    console_cursor_column = 0;
+    update_console_cursor_pixels();
+}
+
+static void console_backspace(void) {
+    if (console_cursor_column == 0u) {
+        return;
+    }
+
+    console_cursor_column--;
+    console_history[console_current_line % CONSOLE_HISTORY_ROWS][console_cursor_column] = ' ';
+    draw_history_cell(console_current_line, console_cursor_column);
+    update_console_cursor_pixels();
 }
 
 static void ensure_console_cursor(void) {
@@ -333,9 +544,15 @@ static void ensure_console_cursor(void) {
         return;
     }
 
-    console_cursor_x = console_origin_x();
-    console_cursor_y = console_origin_y();
+    for (uint64_t row = 0; row < CONSOLE_HISTORY_ROWS; row++) {
+        clear_history_row(row);
+    }
+
+    console_cursor_column = 0;
+    console_current_line = 0;
+    console_view_top_line = 0;
     console_cursor_ready = true;
+    update_console_cursor_pixels();
 }
 
 bool scdk_framebuffer_init(struct limine_framebuffer *framebuffer) {
@@ -445,6 +662,10 @@ scdk_status_t scdk_fb_text_write(const char *buf, size_t len) {
 }
 
 scdk_status_t scdk_fb_text_putchar(char ch) {
+    uint64_t columns;
+    bool follow;
+    uint64_t old_top;
+
     if (active_framebuffer == 0 || active_framebuffer->bpp != 32) {
         return SCDK_ERR_NOTSUP;
     }
@@ -472,16 +693,35 @@ scdk_status_t scdk_fb_text_putchar(char ch) {
             if (status != SCDK_OK) {
                 return status;
             }
-        } while (((console_cursor_x - console_origin_x()) / console_cell_width()) % 4u != 0u);
+        } while (console_cursor_column % 4u != 0u);
         return SCDK_OK;
     }
 
-    if (console_cursor_x + console_cell_width() >= active_framebuffer->width) {
+    columns = console_visible_columns();
+    if (columns == 0u) {
+        return SCDK_ERR_NOTSUP;
+    }
+
+    if (console_cursor_column >= columns) {
         console_newline();
     }
 
-    draw_console_char(ch, console_cursor_x, console_cursor_y);
-    console_cursor_x += console_cell_width();
+    follow = view_is_at_bottom();
+    old_top = console_view_top_line;
+    console_history[console_current_line % CONSOLE_HISTORY_ROWS][console_cursor_column] = ch;
+    if (follow) {
+        console_view_top_line = bottom_view_top_line();
+    }
+    clamp_console_view();
+
+    if (console_view_top_line != old_top) {
+        render_console();
+    } else {
+        draw_history_cell(console_current_line, console_cursor_column);
+    }
+
+    console_cursor_column++;
+    update_console_cursor_pixels();
     return SCDK_OK;
 }
 
@@ -498,9 +738,16 @@ scdk_status_t scdk_fb_text_clear(void) {
               active_framebuffer->width,
               active_framebuffer->height,
               background);
-    console_cursor_x = console_origin_x();
-    console_cursor_y = console_origin_y();
+
+    for (uint64_t row = 0; row < CONSOLE_HISTORY_ROWS; row++) {
+        clear_history_row(row);
+    }
+
+    console_cursor_column = 0;
+    console_current_line = 0;
+    console_view_top_line = 0;
     console_cursor_ready = true;
+    update_console_cursor_pixels();
     return SCDK_OK;
 }
 
@@ -516,9 +763,58 @@ scdk_status_t scdk_fb_text_set_cursor(uint32_t x, uint32_t y) {
         return SCDK_ERR_BOUNDS;
     }
 
-    console_cursor_x = console_origin_x() + (uint64_t)x * console_cell_width();
-    console_cursor_y = console_origin_y() + (uint64_t)y * console_line_step();
+    if (console_view_top_line + y < oldest_history_line() ||
+        console_view_top_line + y > console_current_line) {
+        return SCDK_ERR_BOUNDS;
+    }
+
+    console_cursor_column = x;
+    console_current_line = console_view_top_line + y;
     console_cursor_ready = true;
+    update_console_cursor_pixels();
+    return SCDK_OK;
+}
+
+scdk_status_t scdk_fb_text_scroll(int32_t lines) {
+    uint64_t old_top;
+    uint64_t oldest;
+    uint64_t bottom;
+
+    if (active_framebuffer == 0 || active_framebuffer->bpp != 32) {
+        return SCDK_ERR_NOTSUP;
+    }
+
+    ensure_console_cursor();
+
+    if (lines == 0) {
+        return SCDK_OK;
+    }
+
+    old_top = console_view_top_line;
+    oldest = oldest_history_line();
+    bottom = bottom_view_top_line();
+
+    if (lines < 0) {
+        uint64_t amount = (uint64_t)(-(int64_t)lines);
+        if (amount > console_view_top_line - oldest) {
+            console_view_top_line = oldest;
+        } else {
+            console_view_top_line -= amount;
+        }
+    } else {
+        uint64_t amount = (uint64_t)lines;
+        if (amount > bottom - console_view_top_line) {
+            console_view_top_line = bottom;
+        } else {
+            console_view_top_line += amount;
+        }
+    }
+
+    clamp_console_view();
+    if (console_view_top_line != old_top) {
+        render_console();
+    }
+
     return SCDK_OK;
 }
 
@@ -533,10 +829,16 @@ scdk_status_t scdk_fb_text_get_info(struct scdk_console_info *out) {
 
     ensure_console_cursor();
 
-    out->columns = (uint32_t)console_columns();
+    out->columns = (uint32_t)console_visible_columns();
     out->rows = (uint32_t)console_rows();
-    out->cursor_x = (uint32_t)((console_cursor_x - console_origin_x()) / console_cell_width());
-    out->cursor_y = (uint32_t)((console_cursor_y - console_origin_y()) / console_line_step());
+    out->cursor_x = (uint32_t)console_cursor_column;
+    if (history_line_visible(console_current_line, 0)) {
+        out->cursor_y = (uint32_t)(console_current_line - console_view_top_line);
+    } else if (out->rows != 0u) {
+        out->cursor_y = out->rows - 1u;
+    } else {
+        out->cursor_y = 0u;
+    }
     out->flags = SCDK_CONSOLE_INFO_FRAMEBUFFER_TEXT;
     return SCDK_OK;
 }

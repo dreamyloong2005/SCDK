@@ -19,6 +19,7 @@ scdk_status_t scdk_fb_text_write(const char *buf, size_t len);
 scdk_status_t scdk_fb_text_putchar(char ch);
 scdk_status_t scdk_fb_text_clear(void);
 scdk_status_t scdk_fb_text_set_cursor(uint32_t x, uint32_t y);
+scdk_status_t scdk_fb_text_scroll(int32_t lines);
 scdk_status_t scdk_fb_text_get_info(struct scdk_console_info *out);
 
 #endif

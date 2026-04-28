@@ -197,6 +197,12 @@ static void run_endpoint_message_selftest(void) {
     require_status("console clear", status, SCDK_OK);
     scdk_log_write("test", "console clear path pass");
 
+    scdk_message_init(&msg, 0, SCDK_SERVICE_CONSOLE, SCDK_MSG_CONSOLE_SCROLL);
+    msg.arg0 = (uint64_t)(int64_t)-1;
+    status = scdk_endpoint_call(looked_up_endpoint, &msg);
+    require_status("console scroll", status, SCDK_OK);
+    scdk_log_write("test", "console scroll path pass");
+
     status = scdk_tty_service_init(&tty_endpoint);
     require_status("tty service init", status, SCDK_OK);
 

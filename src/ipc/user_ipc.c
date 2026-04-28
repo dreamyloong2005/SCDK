@@ -247,6 +247,7 @@ scdk_status_t scdk_sys_endpoint_call(scdk_cap_t endpoint_cap,
     case SCDK_MSG_CONSOLE_WRITE:
     case SCDK_MSG_CONSOLE_CLEAR:
     case SCDK_MSG_CONSOLE_GET_INFO:
+    case SCDK_MSG_CONSOLE_SCROLL:
     case SCDK_MSG_TTY_POLL_EVENT:
     case SCDK_MSG_TTY_GET_INFO:
     case SCDK_MSG_CLOSE:

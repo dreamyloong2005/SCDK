@@ -79,6 +79,21 @@ static scdk_status_t console_handle_get_info(struct scdk_message *msg) {
     return SCDK_OK;
 }
 
+static scdk_status_t console_handle_scroll(struct scdk_message *msg) {
+    int64_t lines;
+
+    if (msg == 0) {
+        return SCDK_ERR_INVAL;
+    }
+
+    lines = (int64_t)msg->arg0;
+    if (lines < INT32_MIN || lines > INT32_MAX) {
+        return SCDK_ERR_BOUNDS;
+    }
+
+    return scdk_console_backend_scroll((int32_t)lines);
+}
+
 static scdk_status_t console_handle_ring_process(scdk_cap_t endpoint,
                                                  struct scdk_message *msg) {
     char buffer[SCDK_CONSOLE_RING_MAX_WRITE + 1u];
@@ -178,6 +193,8 @@ static scdk_status_t console_endpoint_handler(scdk_cap_t endpoint,
         return console_handle_get_info(msg);
     case SCDK_MSG_CONSOLE_BIND_OUTPUT_RING:
         return SCDK_ERR_NOTSUP;
+    case SCDK_MSG_CONSOLE_SCROLL:
+        return console_handle_scroll(msg);
     case SCDK_MSG_RING_PROCESS:
         return console_handle_ring_process(endpoint, msg);
     default:
