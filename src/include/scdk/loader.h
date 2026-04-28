@@ -8,7 +8,7 @@
 #include <scdk/types.h>
 
 #define SCDK_LOADER_FLAT_ENTRY_VIRT 0x0000000000400000ull
-#define SCDK_LOADER_MAX_IMAGE_SIZE  16384u
+#define SCDK_LOADER_MAX_IMAGE_SIZE  65536u
 
 /*
  * Control-plane: load a flat user executable through the SCDK VFS service,

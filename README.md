@@ -18,7 +18,7 @@ user-space compatibility layer, but it is not the native kernel API.
 
 ## Version
 
-Current version: `0.4.0-alpha.1`
+Current version: `0.4.0-alpha.2`
 
 ## Current Milestone
 

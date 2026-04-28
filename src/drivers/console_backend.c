@@ -21,8 +21,6 @@ scdk_status_t scdk_console_backend_init(void) {
 
 scdk_status_t scdk_console_backend_write(const char *buffer,
                                          size_t length) {
-    bool needs_newline;
-
     if (buffer == 0) {
         return SCDK_ERR_INVAL;
     }
@@ -32,8 +30,6 @@ scdk_status_t scdk_console_backend_write(const char *buffer,
             length++;
         }
     }
-
-    needs_newline = length == 0u || buffer[length - 1u] != '\n';
 
     if (!console_backend_initialized) {
         (void)scdk_console_backend_init();
@@ -48,19 +44,9 @@ scdk_status_t scdk_console_backend_write(const char *buffer,
                 break;
             }
         }
-
-        if (serial_mirror_enabled && needs_newline) {
-            if (scdk_serial_write_char('\n') != SCDK_OK) {
-                serial_mirror_enabled = false;
-            }
-        }
     }
 
     (void)scdk_fb_text_write(buffer, length);
-    if (needs_newline) {
-        (void)scdk_fb_text_putchar('\n');
-    }
-
     return SCDK_OK;
 }
 

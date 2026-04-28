@@ -9,6 +9,7 @@
 #include <limine.h>
 
 #include <scdk/types.h>
+#include <scdk/vfs.h>
 
 #define SCDK_INITRD_MAX_FILES 32u
 #define SCDK_INITRD_MAX_PATH 128u
@@ -40,5 +41,21 @@ scdk_status_t scdk_initrd_list(void);
  */
 scdk_status_t scdk_initrd_find(const char *path,
                                struct scdk_initrd_file *out_file);
+
+/*
+ * Control-plane: return file or synthetic directory metadata for the parsed
+ * initrd file table.
+ */
+scdk_status_t scdk_initrd_stat(const char *path,
+                               struct scdk_vfs_stat *out_stat);
+
+/*
+ * Control-plane: list one synthetic initrd directory. Directories are derived
+ * from slash-separated file paths inside the ustar payload.
+ */
+scdk_status_t scdk_initrd_listdir(const char *path,
+                                  struct scdk_vfs_dirent *entries,
+                                  uint64_t capacity,
+                                  uint64_t *out_count);
 
 #endif

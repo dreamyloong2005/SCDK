@@ -65,6 +65,13 @@ static scdk_status_t vfs_endpoint_handler(scdk_cap_t endpoint,
     switch (msg->type) {
     case SCDK_MSG_OPEN:
         return vfs_handle_open(msg);
+    case SCDK_MSG_STAT:
+    case SCDK_MSG_LISTDIR:
+        if (msg->arg0 == 0u ||
+            !path_under_root((const char *)(uintptr_t)msg->arg0, msg->arg1)) {
+            return SCDK_ERR_NOENT;
+        }
+        return vfs_forward_to_tmpfs(msg);
     case SCDK_MSG_READ:
     case SCDK_MSG_CLOSE:
         return vfs_forward_to_tmpfs(msg);

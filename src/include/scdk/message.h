@@ -36,6 +36,9 @@ enum scdk_msg_type {
     SCDK_MSG_TTY_POLL_EVENT = 0x2100,
     SCDK_MSG_TTY_BIND_INPUT_RING,
     SCDK_MSG_TTY_GET_INFO,
+
+    SCDK_MSG_STAT = 0x3000,
+    SCDK_MSG_LISTDIR,
 };
 
 struct scdk_message {

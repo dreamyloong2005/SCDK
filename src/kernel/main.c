@@ -10,9 +10,12 @@
 #include <scdk/early_console.h>
 #include <scdk/framebuffer.h>
 #include <scdk/initrd.h>
+#include <scdk/loader.h>
 #include <scdk/log.h>
 #include <scdk/panic.h>
 #include <scdk/selftest.h>
+#include <scdk/service.h>
+#include <scdk/task.h>
 
 #ifndef SCDK_VERSION
 #define SCDK_VERSION "0.0.0-unknown"
@@ -129,6 +132,35 @@ __attribute__((noreturn)) static void idle_forever(void) {
     }
 }
 
+static void launch_init(uint64_t hhdm_offset) {
+    scdk_cap_t session_endpoint = 0;
+    scdk_cap_t task = 0;
+    scdk_cap_t main_thread = 0;
+    scdk_status_t status;
+
+    status = scdk_service_lookup(SCDK_SERVICE_SESSION, &session_endpoint);
+    if (status != SCDK_OK) {
+        scdk_log_warn("session endpoint unavailable for /init: %lld",
+                      (long long)status);
+        return;
+    }
+
+    scdk_log_write("boot", "launching /init");
+    status = scdk_loader_load_from_vfs_with_endpoint("/init",
+                                                     hhdm_offset,
+                                                     session_endpoint,
+                                                     &task,
+                                                     &main_thread);
+    (void)main_thread;
+    if (status != SCDK_OK) {
+        scdk_log_warn("/init handoff failed: %lld", (long long)status);
+        return;
+    }
+
+    (void)scdk_task_cleanup(task);
+    scdk_log_write("boot", "/init exited");
+}
+
 void kmain(void) {
     bool serial_ok = scdk_early_console_init();
     uint64_t hhdm_offset = 0;
@@ -163,6 +195,7 @@ void kmain(void) {
         scdk_panic("core self-tests failed: %lld", (long long)status);
     }
 
-    scdk_log_write("boot", "milestone 30 complete");
+    scdk_log_write("boot", "milestone 31 complete");
+    launch_init(hhdm_offset);
     idle_forever();
 }

@@ -26,6 +26,7 @@
 #include <scdk/ring.h>
 #include <scdk/scheduler.h>
 #include <scdk/service.h>
+#include <scdk/session.h>
 #include <scdk/string.h>
 #include <scdk/task.h>
 #include <scdk/thread.h>
@@ -132,6 +133,8 @@ static void run_endpoint_message_selftest(void) {
     scdk_cap_t looked_up_endpoint = 0;
     scdk_cap_t tty_endpoint = 0;
     scdk_cap_t looked_up_tty = 0;
+    scdk_cap_t session_endpoint = 0;
+    scdk_cap_t looked_up_session = 0;
     struct scdk_message msg;
     scdk_status_t status;
 
@@ -214,6 +217,32 @@ static void run_endpoint_message_selftest(void) {
         scdk_panic("tty event payload mismatch");
     }
     scdk_log_write("tty", "input event path pass");
+
+    status = scdk_session_service_init(&session_endpoint);
+    require_status("session service init", status, SCDK_OK);
+
+    status = scdk_service_lookup(SCDK_SERVICE_SESSION, &looked_up_session);
+    require_status("session service lookup", status, SCDK_OK);
+    if (looked_up_session != session_endpoint) {
+        scdk_panic("session service endpoint mismatch");
+    }
+
+    scdk_message_init(&msg, 0, SCDK_SERVICE_SESSION, SCDK_MSG_SERVICE_LOOKUP);
+    msg.arg0 = SCDK_SERVICE_CONSOLE;
+    status = scdk_endpoint_call(looked_up_session, &msg);
+    require_status("session lookup console", status, SCDK_OK);
+    if ((scdk_cap_t)msg.arg0 != console_endpoint) {
+        scdk_panic("session console cap mismatch");
+    }
+
+    scdk_message_init(&msg, 0, SCDK_SERVICE_SESSION, SCDK_MSG_SERVICE_LOOKUP);
+    msg.arg0 = SCDK_SERVICE_TTY;
+    status = scdk_endpoint_call(looked_up_session, &msg);
+    require_status("session lookup tty", status, SCDK_OK);
+    if ((scdk_cap_t)msg.arg0 != tty_endpoint) {
+        scdk_panic("session tty cap mismatch");
+    }
+    scdk_log_write("m31", "session lookup path pass");
 
     scdk_log_write("test", "endpoint: pass");
     scdk_log_write("test", "console: pass");
@@ -1179,6 +1208,86 @@ static void run_vfs_selftest(void) {
     scdk_log_write("test", "vfs: pass");
 }
 
+static bool dirents_contain(const struct scdk_vfs_dirent *entries,
+                            uint64_t count,
+                            const char *name,
+                            uint64_t type) {
+    for (uint64_t i = 0; i < count; i++) {
+        if (entries[i].type == type &&
+            strlen(entries[i].name) == strlen(name) &&
+            memcmp(entries[i].name, name, strlen(name)) == 0) {
+            return true;
+        }
+    }
+
+    return false;
+}
+
+static void run_m31_vfs_session_selftest(void) {
+    scdk_cap_t session = 0;
+    scdk_cap_t vfs = 0;
+    scdk_cap_t proc = 0;
+    struct scdk_vfs_dirent entries[16];
+    struct scdk_message msg;
+    scdk_status_t status;
+
+    scdk_log_write("test", "m31 vfs/session self-test start");
+
+    status = scdk_service_lookup(SCDK_SERVICE_SESSION, &session);
+    require_status("m31 session service lookup", status, SCDK_OK);
+
+    scdk_message_init(&msg, 0, SCDK_SERVICE_SESSION, SCDK_MSG_SERVICE_LOOKUP);
+    msg.arg0 = SCDK_SERVICE_VFS;
+    status = scdk_endpoint_call(session, &msg);
+    require_status("m31 session lookup vfs", status, SCDK_OK);
+    vfs = (scdk_cap_t)msg.arg0;
+
+    scdk_message_init(&msg, 0, SCDK_SERVICE_SESSION, SCDK_MSG_SERVICE_LOOKUP);
+    msg.arg0 = SCDK_SERVICE_PROC;
+    status = scdk_endpoint_call(session, &msg);
+    require_status("m31 session lookup proc", status, SCDK_OK);
+    proc = (scdk_cap_t)msg.arg0;
+    if (vfs == 0u || proc == 0u) {
+        scdk_panic("m31 session returned empty service cap");
+    }
+
+    scdk_message_init(&msg, 0, SCDK_SERVICE_VFS, SCDK_MSG_STAT);
+    msg.arg0 = (uint64_t)(uintptr_t)"/";
+    msg.arg1 = 1;
+    status = scdk_endpoint_call(vfs, &msg);
+    require_status("m31 vfs stat /", status, SCDK_OK);
+    if (msg.arg0 != SCDK_VFS_NODE_DIR) {
+        scdk_panic("m31 vfs root is not a directory");
+    }
+
+    memset(entries, 0, sizeof(entries));
+    scdk_message_init(&msg, 0, SCDK_SERVICE_VFS, SCDK_MSG_LISTDIR);
+    msg.arg0 = (uint64_t)(uintptr_t)"/";
+    msg.arg1 = 1;
+    msg.arg2 = (uint64_t)(uintptr_t)entries;
+    msg.arg3 = sizeof(entries);
+    status = scdk_endpoint_call(vfs, &msg);
+    require_status("m31 vfs listdir /", status, SCDK_OK);
+    if (!dirents_contain(entries, msg.arg0, "bin", SCDK_VFS_NODE_DIR) ||
+        !dirents_contain(entries, msg.arg0, "hello", SCDK_VFS_NODE_FILE)) {
+        scdk_panic("m31 root directory entries missing");
+    }
+
+    memset(entries, 0, sizeof(entries));
+    scdk_message_init(&msg, 0, SCDK_SERVICE_VFS, SCDK_MSG_LISTDIR);
+    msg.arg0 = (uint64_t)(uintptr_t)"/bin";
+    msg.arg1 = 4;
+    msg.arg2 = (uint64_t)(uintptr_t)entries;
+    msg.arg3 = sizeof(entries);
+    status = scdk_endpoint_call(vfs, &msg);
+    require_status("m31 vfs listdir /bin", status, SCDK_OK);
+    if (!dirents_contain(entries, msg.arg0, "hello", SCDK_VFS_NODE_FILE)) {
+        scdk_panic("m31 /bin/hello directory entry missing");
+    }
+
+    scdk_log_write("m31", "vfs stat/listdir path pass");
+}
+
 static void run_loader_selftest(void) {
     scdk_cap_t task = 0;
     scdk_cap_t main_thread = 0;
@@ -1215,10 +1324,7 @@ static void run_loader_selftest(void) {
 static void run_proc_selftest(void) {
     scdk_cap_t endpoint = 0;
     scdk_cap_t looked_up = 0;
-    scdk_cap_t init_task = 0;
-    scdk_cap_t init_thread = 0;
-    uint32_t task_state = SCDK_TASK_NONE;
-    uint32_t thread_state = SCDK_THREAD_NONE;
+    struct scdk_message msg;
     scdk_status_t status;
 
     scdk_log_write("test", "proc self-test start");
@@ -1232,27 +1338,15 @@ static void run_proc_selftest(void) {
         scdk_panic("proc service endpoint mismatch");
     }
 
-    status = scdk_loader_load_from_vfs_with_endpoint("/init",
-                                                     selftest_hhdm_offset,
-                                                     looked_up,
-                                                     &init_task,
-                                                     &init_thread);
-    require_status("proc /init requested spawn", status, SCDK_OK);
-
-    status = scdk_user_task_state(init_task, &task_state);
-    require_status("proc init task dead state", status, SCDK_OK);
-    if (task_state != SCDK_TASK_DEAD) {
-        scdk_panic("proc /init task did not exit");
+    scdk_message_init(&msg, 0, SCDK_SERVICE_PROC, SCDK_MSG_PROCESS_SPAWN);
+    msg.arg0 = (uint64_t)(uintptr_t)"/hello";
+    msg.arg1 = 6;
+    msg.arg2 = 0;
+    status = scdk_endpoint_call(looked_up, &msg);
+    require_status("proc spawn /hello", status, SCDK_OK);
+    if (msg.arg0 == 0u) {
+        scdk_panic("proc spawn returned empty task cap");
     }
-
-    status = scdk_user_thread_state(init_thread, &thread_state);
-    require_status("proc init thread dead state", status, SCDK_OK);
-    if (thread_state != SCDK_THREAD_DEAD) {
-        scdk_panic("proc /init thread did not exit");
-    }
-
-    status = scdk_task_cleanup(init_task);
-    require_status("proc init task cleanup", status, SCDK_OK);
 
     scdk_log_write("test", "proc: pass");
 }
@@ -1925,6 +2019,7 @@ scdk_status_t scdk_run_core_selftests(void) {
     run_vfs_selftest();
     run_loader_selftest();
     run_proc_selftest();
+    run_m31_vfs_session_selftest();
     run_user_grant_selftest();
     run_console_grant_write_selftest();
     run_user_ring_selftest();

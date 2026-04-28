@@ -64,34 +64,43 @@ static struct scdk_tmpfs_file *alloc_open_file_slot(void) {
     return 0;
 }
 
-static scdk_status_t tmpfs_handle_open(struct scdk_message *msg) {
-    const char *path;
-    char bounded_path[SCDK_INITRD_MAX_PATH];
+static scdk_status_t tmpfs_path_from_message(const struct scdk_message *msg,
+                                             char *bounded_path,
+                                             size_t path_size) {
     uint64_t path_length;
+
+    if (msg == 0 || bounded_path == 0 || path_size == 0u || msg->arg0 == 0u) {
+        return SCDK_ERR_INVAL;
+    }
+
+    path_length = msg->arg1;
+    if (path_length == 0u) {
+        path_length = strlen((const char *)(uintptr_t)msg->arg0);
+    }
+
+    if (path_length == 0u || path_length > path_size - 1u) {
+        return SCDK_ERR_BOUNDS;
+    }
+
+    memcpy(bounded_path, (const char *)(uintptr_t)msg->arg0, (size_t)path_length);
+    bounded_path[path_length] = '\0';
+    return SCDK_OK;
+}
+
+static scdk_status_t tmpfs_handle_open(struct scdk_message *msg) {
+    char bounded_path[SCDK_INITRD_MAX_PATH];
     struct scdk_initrd_file backing;
     struct scdk_tmpfs_file *slot;
     scdk_object_id_t object_id = 0;
     scdk_cap_t cap = 0;
     scdk_status_t status;
 
-    if (msg == 0 || msg->arg0 == 0u) {
-        return SCDK_ERR_INVAL;
+    status = tmpfs_path_from_message(msg, bounded_path, sizeof(bounded_path));
+    if (status != SCDK_OK) {
+        return status;
     }
 
-    path = (const char *)(uintptr_t)msg->arg0;
-    path_length = msg->arg1;
-    if (path_length > SCDK_INITRD_MAX_PATH - 1u) {
-        return SCDK_ERR_BOUNDS;
-    }
-
-    if (path_length == 0u) {
-        status = scdk_initrd_find(path, &backing);
-    } else {
-        memcpy(bounded_path, path, (size_t)path_length);
-        bounded_path[path_length] = '\0';
-        status = scdk_initrd_find(bounded_path, &backing);
-    }
-
+    status = scdk_initrd_find(bounded_path, &backing);
     if (status != SCDK_OK) {
         return status;
     }
@@ -123,6 +132,58 @@ static scdk_status_t tmpfs_handle_open(struct scdk_message *msg) {
 
     msg->arg0 = cap;
     msg->arg1 = backing.size;
+    return SCDK_OK;
+}
+
+static scdk_status_t tmpfs_handle_stat(struct scdk_message *msg) {
+    char bounded_path[SCDK_INITRD_MAX_PATH];
+    struct scdk_vfs_stat stat;
+    scdk_status_t status;
+
+    status = tmpfs_path_from_message(msg, bounded_path, sizeof(bounded_path));
+    if (status != SCDK_OK) {
+        return status;
+    }
+
+    status = scdk_initrd_stat(bounded_path, &stat);
+    if (status != SCDK_OK) {
+        return status;
+    }
+
+    msg->arg0 = stat.type;
+    msg->arg1 = stat.size;
+    msg->arg2 = 0;
+    msg->arg3 = 0;
+    return SCDK_OK;
+}
+
+static scdk_status_t tmpfs_handle_listdir(struct scdk_message *msg) {
+    char bounded_path[SCDK_INITRD_MAX_PATH];
+    struct scdk_vfs_dirent *entries;
+    uint64_t capacity;
+    uint64_t count = 0;
+    scdk_status_t status;
+
+    if (msg == 0 || msg->arg2 == 0u || msg->arg3 < sizeof(*entries)) {
+        return SCDK_ERR_INVAL;
+    }
+
+    status = tmpfs_path_from_message(msg, bounded_path, sizeof(bounded_path));
+    if (status != SCDK_OK) {
+        return status;
+    }
+
+    entries = (struct scdk_vfs_dirent *)(uintptr_t)msg->arg2;
+    capacity = msg->arg3 / sizeof(*entries);
+    status = scdk_initrd_listdir(bounded_path, entries, capacity, &count);
+    if (status != SCDK_OK) {
+        return status;
+    }
+
+    msg->arg0 = count;
+    msg->arg1 = 0;
+    msg->arg2 = 0;
+    msg->arg3 = 0;
     return SCDK_OK;
 }
 
@@ -197,6 +258,10 @@ static scdk_status_t tmpfs_endpoint_handler(scdk_cap_t endpoint,
     switch (msg->type) {
     case SCDK_MSG_OPEN:
         return tmpfs_handle_open(msg);
+    case SCDK_MSG_STAT:
+        return tmpfs_handle_stat(msg);
+    case SCDK_MSG_LISTDIR:
+        return tmpfs_handle_listdir(msg);
     case SCDK_MSG_READ:
         return tmpfs_handle_read(msg);
     case SCDK_MSG_CLOSE:

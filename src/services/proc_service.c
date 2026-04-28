@@ -39,6 +39,7 @@ static scdk_status_t bounded_path_from_message(const struct scdk_message *msg,
 
 static scdk_status_t proc_handle_spawn(struct scdk_message *msg) {
     char path[SCDK_PROC_MAX_PATH];
+    scdk_cap_t bootstrap_endpoint = 0;
     scdk_cap_t task = 0;
     scdk_cap_t main_thread = 0;
     scdk_status_t status;
@@ -49,10 +50,28 @@ static scdk_status_t proc_handle_spawn(struct scdk_message *msg) {
     }
 
     scdk_log_write("proc", "spawn %s", path);
-    status = scdk_loader_load_from_vfs(path,
-                                       proc_hhdm_offset,
-                                       &task,
-                                       &main_thread);
+
+    bootstrap_endpoint = (scdk_cap_t)msg->arg2;
+    if (bootstrap_endpoint != 0u) {
+        status = scdk_cap_check(bootstrap_endpoint,
+                                SCDK_RIGHT_SEND,
+                                SCDK_OBJ_ENDPOINT,
+                                0);
+        if (status != SCDK_OK) {
+            return status;
+        }
+
+        status = scdk_loader_load_from_vfs_with_endpoint(path,
+                                                         proc_hhdm_offset,
+                                                         bootstrap_endpoint,
+                                                         &task,
+                                                         &main_thread);
+    } else {
+        status = scdk_loader_load_from_vfs(path,
+                                           proc_hhdm_offset,
+                                           &task,
+                                           &main_thread);
+    }
     if (status != SCDK_OK) {
         return status;
     }

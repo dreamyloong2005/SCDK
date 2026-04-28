@@ -369,3 +369,194 @@ scdk_status_t scdk_initrd_find(const char *path,
 
     return SCDK_ERR_NOENT;
 }
+
+static size_t normalized_query_len(const char *path) {
+    size_t len = strlen(path);
+
+    while (len > 1u && path[len - 1u] == '/') {
+        len--;
+    }
+
+    return len;
+}
+
+static bool path_eq_len(const char *path, const char *query, size_t query_len) {
+    return strlen(path) == query_len && memcmp(path, query, query_len) == 0;
+}
+
+static bool path_has_dir_prefix(const char *path,
+                                const char *query,
+                                size_t query_len) {
+    if (query_len == 1u && query[0] == '/') {
+        return path[0] == '/' && path[1] != '\0';
+    }
+
+    return strlen(path) > query_len + 1u &&
+           memcmp(path, query, query_len) == 0 &&
+           path[query_len] == '/';
+}
+
+static bool dirent_name_eq(const char *lhs, const char *rhs, size_t rhs_len) {
+    return strlen(lhs) == rhs_len && memcmp(lhs, rhs, rhs_len) == 0;
+}
+
+static scdk_status_t add_dirent(struct scdk_vfs_dirent *entries,
+                                uint64_t capacity,
+                                uint64_t *inout_count,
+                                const char *name,
+                                size_t name_len,
+                                uint64_t type,
+                                uint64_t size) {
+    struct scdk_vfs_dirent *entry;
+
+    if (entries == 0 || inout_count == 0 || name == 0 || name_len == 0u) {
+        return SCDK_ERR_INVAL;
+    }
+
+    if (name_len >= SCDK_VFS_MAX_NAME) {
+        return SCDK_ERR_BOUNDS;
+    }
+
+    for (uint64_t i = 0; i < *inout_count; i++) {
+        if (!dirent_name_eq(entries[i].name, name, name_len)) {
+            continue;
+        }
+
+        if (type == SCDK_VFS_NODE_DIR) {
+            entries[i].type = SCDK_VFS_NODE_DIR;
+            entries[i].size = 0;
+        }
+        return SCDK_OK;
+    }
+
+    if (*inout_count >= capacity) {
+        return SCDK_ERR_BOUNDS;
+    }
+
+    entry = &entries[*inout_count];
+    memset(entry, 0, sizeof(*entry));
+    memcpy(entry->name, name, name_len);
+    entry->name[name_len] = '\0';
+    entry->type = type;
+    entry->size = size;
+    *inout_count += 1u;
+    return SCDK_OK;
+}
+
+scdk_status_t scdk_initrd_stat(const char *path,
+                               struct scdk_vfs_stat *out_stat) {
+    size_t query_len;
+
+    if (!initrd_initialized) {
+        return SCDK_ERR_NOTSUP;
+    }
+
+    if (path == 0 || out_stat == 0 || path[0] != '/') {
+        return SCDK_ERR_INVAL;
+    }
+
+    memset(out_stat, 0, sizeof(*out_stat));
+    query_len = normalized_query_len(path);
+
+    if (query_len == 1u) {
+        out_stat->type = SCDK_VFS_NODE_DIR;
+        out_stat->size = 0;
+        return SCDK_OK;
+    }
+
+    for (uint32_t i = 0; i < initrd_file_count; i++) {
+        if (path_eq_len(initrd_files[i].path, path, query_len)) {
+            out_stat->type = SCDK_VFS_NODE_FILE;
+            out_stat->size = initrd_files[i].size;
+            return SCDK_OK;
+        }
+    }
+
+    for (uint32_t i = 0; i < initrd_file_count; i++) {
+        if (path_has_dir_prefix(initrd_files[i].path, path, query_len)) {
+            out_stat->type = SCDK_VFS_NODE_DIR;
+            out_stat->size = 0;
+            return SCDK_OK;
+        }
+    }
+
+    return SCDK_ERR_NOENT;
+}
+
+scdk_status_t scdk_initrd_listdir(const char *path,
+                                  struct scdk_vfs_dirent *entries,
+                                  uint64_t capacity,
+                                  uint64_t *out_count) {
+    size_t query_len;
+    uint64_t count = 0;
+    struct scdk_vfs_stat stat;
+    scdk_status_t status;
+
+    if (!initrd_initialized) {
+        return SCDK_ERR_NOTSUP;
+    }
+
+    if (path == 0 || entries == 0 || out_count == 0 || capacity == 0u ||
+        path[0] != '/') {
+        return SCDK_ERR_INVAL;
+    }
+
+    query_len = normalized_query_len(path);
+    status = scdk_initrd_stat(path, &stat);
+    if (status != SCDK_OK) {
+        return status;
+    }
+
+    if (stat.type != SCDK_VFS_NODE_DIR) {
+        return SCDK_ERR_NOTSUP;
+    }
+
+    memset(entries, 0, sizeof(entries[0]) * (size_t)capacity);
+
+    for (uint32_t i = 0; i < initrd_file_count; i++) {
+        const char *entry_path = initrd_files[i].path;
+        const char *remainder;
+        const char *slash;
+        size_t name_len = 0;
+        uint64_t type = SCDK_VFS_NODE_FILE;
+        uint64_t size = initrd_files[i].size;
+
+        if (!path_has_dir_prefix(entry_path, path, query_len)) {
+            continue;
+        }
+
+        if (query_len == 1u) {
+            remainder = entry_path + 1u;
+        } else {
+            remainder = entry_path + query_len + 1u;
+        }
+
+        if (remainder[0] == '\0') {
+            continue;
+        }
+
+        slash = remainder;
+        while (slash[name_len] != '\0' && slash[name_len] != '/') {
+            name_len++;
+        }
+
+        if (slash[name_len] == '/') {
+            type = SCDK_VFS_NODE_DIR;
+            size = 0;
+        }
+
+        status = add_dirent(entries,
+                            capacity,
+                            &count,
+                            remainder,
+                            name_len,
+                            type,
+                            size);
+        if (status != SCDK_OK) {
+            return status;
+        }
+    }
+
+    *out_count = count;
+    return SCDK_OK;
+}

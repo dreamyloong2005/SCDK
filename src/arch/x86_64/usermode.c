@@ -33,7 +33,7 @@
 #define GDT_FLAGS_LONG_CODE 0xau
 #define GDT_FLAGS_DATA      0xcu
 
-#define SCDK_USERMODE_MAX_FLAT_PAGES 4u
+#define SCDK_USERMODE_MAX_FLAT_PAGES 16u
 
 struct gdt_pointer {
     uint16_t limit;

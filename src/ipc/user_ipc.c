@@ -146,7 +146,10 @@ static scdk_status_t prepare_user_buffer_arg(struct scdk_message *msg,
     }
 
     if (msg->type != SCDK_MSG_WRITE &&
-        msg->type != SCDK_MSG_PROCESS_SPAWN) {
+        msg->type != SCDK_MSG_OPEN &&
+        msg->type != SCDK_MSG_PROCESS_SPAWN &&
+        msg->type != SCDK_MSG_STAT &&
+        msg->type != SCDK_MSG_LISTDIR) {
         return SCDK_ERR_NOTSUP;
     }
 
@@ -201,7 +204,10 @@ scdk_status_t scdk_sys_endpoint_call(scdk_cap_t endpoint_cap,
 
     switch (msg.type) {
     case SCDK_MSG_WRITE:
+    case SCDK_MSG_OPEN:
     case SCDK_MSG_PROCESS_SPAWN:
+    case SCDK_MSG_STAT:
+    case SCDK_MSG_LISTDIR:
         status = prepare_user_buffer_arg(&msg, payload_buffer, sizeof(payload_buffer));
         if (status != SCDK_OK) {
             msg.status = (uint64_t)status;
@@ -213,13 +219,38 @@ scdk_status_t scdk_sys_endpoint_call(scdk_cap_t endpoint_cap,
             }
             return status;
         }
+        if (msg.type == SCDK_MSG_LISTDIR) {
+            status = scdk_user_validate_range((uintptr_t)msg.arg2,
+                                              (size_t)msg.arg3,
+                                              true);
+            if (status != SCDK_OK) {
+                msg.status = (uint64_t)status;
+                (void)scdk_user_copy_to(user_message_ptr, &msg, sizeof(msg));
+                scdk_fault_handle_bad_user_pointer((uintptr_t)msg.arg2, status);
+                return status;
+            }
+        }
         break;
     case SCDK_MSG_READ:
+        if (msg.target == SCDK_SERVICE_VFS) {
+            status = scdk_user_validate_range((uintptr_t)msg.arg2,
+                                              (size_t)msg.arg3,
+                                              true);
+            if (status != SCDK_OK) {
+                msg.status = (uint64_t)status;
+                (void)scdk_user_copy_to(user_message_ptr, &msg, sizeof(msg));
+                scdk_fault_handle_bad_user_pointer((uintptr_t)msg.arg2, status);
+                return status;
+            }
+        }
+        break;
     case SCDK_MSG_CONSOLE_WRITE:
     case SCDK_MSG_CONSOLE_CLEAR:
     case SCDK_MSG_CONSOLE_GET_INFO:
     case SCDK_MSG_TTY_POLL_EVENT:
     case SCDK_MSG_TTY_GET_INFO:
+    case SCDK_MSG_CLOSE:
+    case SCDK_MSG_SERVICE_LOOKUP:
         break;
     default:
         msg.status = (uint64_t)SCDK_ERR_NOTSUP;

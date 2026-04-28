@@ -3,7 +3,9 @@
 
 .set SCDK_SYS_ENDPOINT_CALL, 1
 .set SCDK_SYS_EXIT, 3
+.set SCDK_SERVICE_SESSION, 8
 .set SCDK_SERVICE_PROC, 4
+.set SCDK_MSG_SERVICE_LOOKUP, 8
 .set SCDK_MSG_PROCESS_SPAWN, 9
 
 .section .text
@@ -16,6 +18,21 @@ _start:
     movq %rsp, %rsi
 
     movq $0, 0(%rsi)
+    movq $SCDK_SERVICE_SESSION, 8(%rsi)
+    movq $SCDK_MSG_SERVICE_LOOKUP, 16(%rsi)
+    movq $SCDK_SERVICE_PROC, 24(%rsi)
+    movq $0, 32(%rsi)
+    movq $0, 40(%rsi)
+    movq $0, 48(%rsi)
+    movq $0, 56(%rsi)
+
+    movq $SCDK_SYS_ENDPOINT_CALL, %rax
+    movq %rbx, %rdi
+    syscall
+
+    movq 24(%rsi), %r12
+
+    movq $0, 0(%rsi)
     movq $SCDK_SERVICE_PROC, 8(%rsi)
     movq $SCDK_MSG_PROCESS_SPAWN, 16(%rsi)
     leaq hello_path(%rip), %rax
@@ -26,7 +43,7 @@ _start:
     movq $0, 56(%rsi)
 
     movq $SCDK_SYS_ENDPOINT_CALL, %rax
-    movq %rbx, %rdi
+    movq %r12, %rdi
     syscall
 
     movq $SCDK_SYS_EXIT, %rax
